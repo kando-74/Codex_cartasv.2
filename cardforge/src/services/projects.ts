@@ -13,7 +13,7 @@ import {
   type DocumentData,
   type DocumentSnapshot,
 } from 'firebase/firestore'
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
+import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage'
 import { ensureUser, db, storage } from '../lib/firebase'
 import type { Card, GameContext, Project, ProjectAssets, ProjectListItem } from '../types'
 
@@ -30,6 +30,33 @@ const defaultGameContext: GameContext = {
 const defaultAssets: ProjectAssets = {
   referenceImages: [],
   availableIcons: [],
+}
+
+const deleteStorageAssets = async (paths: Array<string | undefined>): Promise<void> => {
+  const uniquePaths = Array.from(
+    new Set(paths.filter((path): path is string => typeof path === 'string' && path.length > 0)),
+  )
+
+  if (uniquePaths.length === 0) {
+    return
+  }
+
+  const deletions = uniquePaths.map((path) => ({
+    path,
+    promise: deleteObject(ref(storage, path)),
+  }))
+
+  const results = await Promise.allSettled(deletions.map((item) => item.promise))
+
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      const { path } = deletions[index]
+      console.error(
+        `No se pudo eliminar el archivo de Storage en la ruta ${path}:`,
+        result.reason,
+      )
+    }
+  })
 }
 
 const createBaseCard = (): Card => ({
@@ -164,8 +191,44 @@ export async function renameProject(projectId: string, name: string): Promise<vo
   await updateProject(projectId, { name })
 }
 
+/**
+ * Elimina un proyecto y todos sus recursos asociados en Firebase Storage.
+ * Para evitar archivos huérfanos, se obtiene primero el documento del proyecto,
+ * se intentan borrar todas las rutas encontradas y solo después se elimina el
+ * documento de Firestore.
+ */
 export async function deleteProject(projectId: string): Promise<void> {
   const docRef = doc(db, COLLECTION, projectId)
+  const snapshot = await getDoc(docRef)
+  const pathsToDelete: Array<string | undefined> = []
+
+  if (snapshot.exists()) {
+    const data = snapshot.data()
+    const cards = (data?.cards as Record<string, Card> | undefined) ?? {}
+    const assets = (data?.assets as ProjectAssets | undefined) ?? {
+      referenceImages: [],
+      availableIcons: [],
+    }
+
+    for (const card of Object.values(cards)) {
+      if (card) {
+        pathsToDelete.push(card.imagePath, card.thumbPath)
+      }
+    }
+
+    assets.referenceImages.forEach((asset) => {
+      if (asset?.path) {
+        pathsToDelete.push(asset.path)
+      }
+    })
+    assets.availableIcons.forEach((asset) => {
+      if (asset?.path) {
+        pathsToDelete.push(asset.path)
+      }
+    })
+  }
+
+  await deleteStorageAssets(pathsToDelete)
   await deleteDoc(docRef)
 }
 
@@ -204,6 +267,18 @@ export async function updateCard(projectId: string, cardId: string, data: Partia
 export async function removeCard(projectId: string, cardId: string): Promise<void> {
   const docRef = doc(db, COLLECTION, projectId)
   const sanitizedId = sanitizeId(cardId)
+  const snapshot = await getDoc(docRef)
+
+  if (snapshot.exists()) {
+    const data = snapshot.data()
+    const cards = data?.cards as Record<string, Card> | undefined
+    const card = cards?.[sanitizedId]
+
+    if (card) {
+      await deleteStorageAssets([card.imagePath, card.thumbPath])
+    }
+  }
+
   await updateDoc(docRef, {
     [`cards.${sanitizedId}`]: deleteField(),
     updatedAt: serverTimestamp(),
