@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   createProject,
@@ -11,18 +11,51 @@ import type { ProjectListItem } from '../types'
 const formatDate = (date?: Date) =>
   date ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeStyle: 'short' }).format(date) : 'Sin fecha'
 
+const DEFAULT_PROJECT_NAME = 'Nuevo proyecto'
+const MIN_PROJECT_NAME_LENGTH = 3
+
 const ProjectsList = () => {
   const [projects, setProjects] = useState<ProjectListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
+  const [nameTouched, setNameTouched] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [renamingValue, setRenamingValue] = useState('')
   const navigate = useNavigate()
   const isActiveRef = useRef(true)
+  const projectNameInputRef = useRef<HTMLInputElement | null>(null)
+  const projectNameHintId = useId()
 
   const hasProjects = useMemo(() => projects.length > 0, [projects])
+  const normalizedDefaultProjectName = useMemo(
+    () => DEFAULT_PROJECT_NAME.toLocaleLowerCase('es-ES'),
+    [],
+  )
+  const trimmedProjectName = useMemo(() => newName.trim(), [newName])
+  const normalizedProjectName = useMemo(
+    () => trimmedProjectName.toLocaleLowerCase('es-ES'),
+    [trimmedProjectName],
+  )
+  const isProjectNameEmpty = trimmedProjectName.length === 0
+  const isProjectNameTooShort =
+    trimmedProjectName.length > 0 && trimmedProjectName.length < MIN_PROJECT_NAME_LENGTH
+  const isProjectNameDefault =
+    trimmedProjectName.length > 0 && normalizedProjectName === normalizedDefaultProjectName
+  const showProjectNameValidation = nameTouched
+  const projectNameError = showProjectNameValidation
+    ? isProjectNameEmpty
+      ? 'Escribe un nombre para tu proyecto.'
+      : isProjectNameTooShort
+      ? `Usa al menos ${MIN_PROJECT_NAME_LENGTH} caracteres.`
+      : isProjectNameDefault
+      ? 'Elige un nombre distinto a "Nuevo proyecto".'
+      : null
+    : null
+  const canCreateProject = !(
+    isProjectNameEmpty || isProjectNameTooShort || isProjectNameDefault || creating
+  )
 
   const loadProjects = useCallback(
     async (options?: { isActive?: () => boolean }) => {
@@ -73,7 +106,16 @@ const ProjectsList = () => {
 
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault()
-    const name = newName.trim() || 'Nuevo proyecto'
+    setNameTouched(true)
+    const name = newName.trim()
+    const normalizedName = name.toLocaleLowerCase('es-ES')
+    if (
+      name.length < MIN_PROJECT_NAME_LENGTH ||
+      normalizedName === normalizedDefaultProjectName
+    ) {
+      projectNameInputRef.current?.focus()
+      return
+    }
     try {
       setCreating(true)
       const project = await createProject(name)
@@ -81,6 +123,7 @@ const ProjectsList = () => {
         return
       }
       setNewName('')
+      setNameTouched(false)
       await loadProjects()
       if (!isActiveRef.current) {
         return
@@ -152,13 +195,31 @@ const ProjectsList = () => {
           <label className="flex flex-1 flex-col gap-1">
             Nombre del proyecto
             <input
+              ref={projectNameInputRef}
               value={newName}
-              onChange={(event) => setNewName(event.target.value)}
+              onChange={(event) => {
+                setNewName(event.target.value)
+                setNameTouched(true)
+              }}
+              onBlur={() => setNameTouched(true)}
               placeholder="Ej. Mazmorra Arcana"
+              aria-invalid={projectNameError ? 'true' : 'false'}
+              aria-describedby={projectNameHintId}
               className="w-full"
             />
+            <span
+              id={projectNameHintId}
+              className={
+                projectNameError
+                  ? 'text-sm text-red-300'
+                  : 'text-sm text-slate-400'
+              }
+            >
+              {projectNameError ??
+                `Elige un nombre descriptivo con al menos ${MIN_PROJECT_NAME_LENGTH} caracteres.`}
+            </span>
           </label>
-          <button type="submit" disabled={creating} className="sm:w-auto">
+          <button type="submit" disabled={!canCreateProject} className="sm:w-auto">
             {creating ? 'Creando...' : 'Crear proyecto'}
           </button>
         </form>
