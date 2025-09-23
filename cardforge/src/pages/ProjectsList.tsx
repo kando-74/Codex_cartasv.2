@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   createProject,
@@ -20,25 +20,55 @@ const ProjectsList = () => {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [renamingValue, setRenamingValue] = useState('')
   const navigate = useNavigate()
+  const isActiveRef = useRef(true)
 
   const hasProjects = useMemo(() => projects.length > 0, [projects])
 
-  const loadProjects = useCallback(async () => {
-    setLoading(true)
-    try {
-      const data = await listProjects()
-      setProjects(data)
-      setError(null)
-    } catch (err) {
-      console.error(err)
-      setError('No se pudieron cargar los proyectos.')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const loadProjects = useCallback(
+    async (options?: { isActive?: () => boolean }) => {
+      const isActive = options?.isActive ?? (() => isActiveRef.current)
+
+      if (!isActive()) {
+        return
+      }
+
+      setLoading(true)
+
+      try {
+        const data = await listProjects()
+        if (!isActive()) {
+          return
+        }
+        setProjects(data)
+        if (!isActive()) {
+          return
+        }
+        setError(null)
+      } catch (err) {
+        console.error(err)
+        if (!isActive()) {
+          return
+        }
+        setError('No se pudieron cargar los proyectos.')
+      } finally {
+        if (isActive()) {
+          setLoading(false)
+        }
+      }
+    },
+    [],
+  )
 
   useEffect(() => {
-    loadProjects().catch(console.error)
+    let active = true
+    isActiveRef.current = true
+
+    loadProjects({ isActive: () => active }).catch(console.error)
+
+    return () => {
+      active = false
+      isActiveRef.current = false
+    }
   }, [loadProjects])
 
   const handleCreate = async (event: FormEvent) => {
@@ -47,14 +77,24 @@ const ProjectsList = () => {
     try {
       setCreating(true)
       const project = await createProject(name)
+      if (!isActiveRef.current) {
+        return
+      }
       setNewName('')
       await loadProjects()
+      if (!isActiveRef.current) {
+        return
+      }
       navigate(`/p/${project.id}`)
     } catch (err) {
       console.error(err)
-      setError('No se pudo crear el proyecto.')
+      if (isActiveRef.current) {
+        setError('No se pudo crear el proyecto.')
+      }
     } finally {
-      setCreating(false)
+      if (isActiveRef.current) {
+        setCreating(false)
+      }
     }
   }
 
@@ -69,12 +109,17 @@ const ProjectsList = () => {
     }
     try {
       await renameProject(projectId, renamingValue.trim())
+      if (!isActiveRef.current) {
+        return
+      }
       setEditingId(null)
       setRenamingValue('')
       await loadProjects()
     } catch (err) {
       console.error(err)
-      setError('No se pudo renombrar el proyecto.')
+      if (isActiveRef.current) {
+        setError('No se pudo renombrar el proyecto.')
+      }
     }
   }
 
@@ -84,10 +129,15 @@ const ProjectsList = () => {
     }
     try {
       await deleteProject(projectId)
+      if (!isActiveRef.current) {
+        return
+      }
       await loadProjects()
     } catch (err) {
       console.error(err)
-      setError('No se pudo eliminar el proyecto.')
+      if (isActiveRef.current) {
+        setError('No se pudo eliminar el proyecto.')
+      }
     }
   }
 
