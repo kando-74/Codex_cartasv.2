@@ -76,23 +76,51 @@ const Editor = () => {
 
   useEffect(() => {
     if (!projectId) return
-    setLoading(true)
-    loadProject(projectId)
-      .then((data) => {
+
+    let active = true
+
+    const fetchProject = async () => {
+      if (!active) {
+        return
+      }
+      setLoading(true)
+      try {
+        const data = await loadProject(projectId)
+        if (!active) {
+          return
+        }
         setProject({
           ...data,
           gameContext: data.gameContext ?? getDefaultContext(),
           assets: data.assets ?? getDefaultAssets(),
         })
+        if (!active) {
+          return
+        }
         const cardIds = Object.keys(data.cards ?? {})
         setSelectedCardId(cardIds[0] ?? null)
+        if (!active) {
+          return
+        }
         setError(null)
-      })
-      .catch((err) => {
+      } catch (err) {
         console.error(err)
+        if (!active) {
+          return
+        }
         setError('No se pudo cargar el proyecto.')
-      })
-      .finally(() => setLoading(false))
+      } finally {
+        if (active) {
+          setLoading(false)
+        }
+      }
+    }
+
+    fetchProject().catch(console.error)
+
+    return () => {
+      active = false
+    }
   }, [projectId])
 
   const handleSave = useCallback(async () => {
