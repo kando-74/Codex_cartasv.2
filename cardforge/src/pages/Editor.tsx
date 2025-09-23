@@ -224,14 +224,46 @@ const Editor = () => {
   }
 
   const handleGenerateImage = async () => {
-    if (!selectedCard) return
+    if (!selectedCard || !project) return
     setIsGeneratingImage(true)
     try {
-      const base64 = await generateImageBase64()
+      const promptSegments: string[] = []
+
+      promptSegments.push(
+        `Genera una ilustración para una carta de juego de mesa del proyecto "${project.name}".`,
+      )
+
+      if (project.gameContext?.description) {
+        promptSegments.push(`Contexto del mundo: ${project.gameContext.description}.`)
+      }
+
+      if (project.gameContext?.artStyle) {
+        promptSegments.push(`Estilo artístico deseado: ${project.gameContext.artStyle}.`)
+      }
+
+      if (selectedCard.imageDescription?.trim()) {
+        promptSegments.push(`Descripción específica de la carta: ${selectedCard.imageDescription}.`)
+      } else if (selectedCard.actionDescription?.trim()) {
+        promptSegments.push(`Acción principal de la carta: ${selectedCard.actionDescription}.`)
+      } else if (selectedCard.context?.trim()) {
+        promptSegments.push(`Contexto narrativo de la carta: ${selectedCard.context}.`)
+      }
+
+      if (selectedCard.icons?.length) {
+        promptSegments.push(`Elementos o iconografía sugerida: ${selectedCard.icons.join(', ')}.`)
+      }
+
+      const prompt = promptSegments.join(' ')
+
+      const base64 = await generateImageBase64(prompt)
       updateCardState({ ...selectedCard, imageUrl: base64 })
     } catch (err) {
       console.error(err)
-      setError('No se pudo generar la imagen.')
+      const message =
+        err instanceof Error
+          ? `No se pudo generar la imagen: ${err.message}`
+          : 'No se pudo generar la imagen.'
+      setError(message)
     } finally {
       setIsGeneratingImage(false)
     }

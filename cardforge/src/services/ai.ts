@@ -3,6 +3,8 @@ import type { JSONSchema } from '../types'
 const baseUrl = import.meta.env.VITE_AI_BASE_URL
 const apiKey = import.meta.env.VITE_AI_API_KEY
 const model = import.meta.env.VITE_AI_MODEL ?? 'qwen-plus'
+const imageModel = import.meta.env.VITE_AI_IMAGE_MODEL ?? 'wanx-v1'
+const imageSize = import.meta.env.VITE_AI_IMAGE_SIZE ?? '1024x1024'
 
 const buildHeaders = () => ({
   'Content-Type': 'application/json',
@@ -103,9 +105,46 @@ export async function generateJSON<T>(
   }
 }
 
-export async function generateImageBase64(): Promise<string> {
-  const transparentPixel =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/xcAAukB9p7nEbcAAAAASUVORK5CYII='
-  // TODO: Implementar integración real con un generador de imágenes compatible con Qwen.
-  return `data:image/png;base64,${transparentPixel}`
+export async function generateImageBase64(prompt: string): Promise<string> {
+  if (!prompt.trim()) {
+    throw new Error('Proporciona una descripción para generar la imagen.')
+  }
+
+  if (!baseUrl || !apiKey) {
+    throw new Error('Configura las variables AI_* en tu entorno para usar la IA.')
+  }
+
+  const response = await fetch(buildUrl('/v1/images/generations'), {
+    method: 'POST',
+    headers: buildHeaders(),
+    body: JSON.stringify({
+      model: imageModel,
+      prompt,
+      size: imageSize,
+      response_format: 'b64_json',
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Error al generar imagen: ${response.status} ${errorText}`)
+  }
+
+  const payload = await response.json()
+
+  const base64Content: string | undefined =
+    payload?.data?.[0]?.b64_json ??
+    payload?.data?.[0]?.base64 ??
+    payload?.data?.[0]?.content ??
+    payload?.image_base64 ??
+    payload?.base64 ??
+    payload?.b64_json
+
+  if (!base64Content) {
+    throw new Error('El servicio de imágenes no devolvió datos en base64.')
+  }
+
+  return base64Content.startsWith('data:')
+    ? base64Content
+    : `data:image/png;base64,${base64Content}`
 }
