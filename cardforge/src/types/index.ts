@@ -130,6 +130,7 @@ export interface Project {
   assets: ProjectAssets
   createdAt?: Date
   updatedAt?: Date
+  archivedAt?: Date | null
 }
 
 export interface ProjectListItem {
@@ -137,6 +138,7 @@ export interface ProjectListItem {
   name: string
   updatedAt?: Date
   cardCount: number
+  archivedAt?: Date | null
 }
 
 export interface JSONSchema {
