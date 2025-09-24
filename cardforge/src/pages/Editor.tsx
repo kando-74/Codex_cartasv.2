@@ -7,7 +7,9 @@ import IconGenerator from '../components/IconGenerator'
 import Loader from '../components/Loader'
 import ProjectActions from '../components/ProjectActions'
 import { useErrorToasts } from '../components/ErrorToastContext'
-import { generateImageBase64, generateJSON } from '../services/ai'
+import AiControlPanel from '../components/AiControlPanel'
+import AiPendingReview from '../components/AiPendingReview'
+import { generateImageBase64, generateJSON, mapErrorToUiMessage } from '../services/ai'
 import {
   addCard,
   createEmptyCard,
@@ -19,7 +21,16 @@ import {
   updateProject,
   uploadImage,
 } from '../services/projects'
-import type { Card, JSONSchema, Project } from '../types'
+import { getDefaultPromptTemplates, useAiMetrics, validateCardCompletion } from '../lib/ai'
+import type {
+  AiErrorKind,
+  AiHistoryEntry,
+  AiPromptTemplate,
+  Card,
+  JSONSchema,
+  PendingAiResult,
+  Project,
+} from '../types'
 
 const cardSchema: JSONSchema = {
   title: 'CardforgeCard',
@@ -64,6 +75,97 @@ const Editor = () => {
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [dirty, setDirty] = useState(false)
   const { showError, showInfo } = useErrorToasts()
+  const aiMetrics = useAiMetrics()
+  const promptTemplates = useMemo<AiPromptTemplate[]>(() => getDefaultPromptTemplates(), [])
+  const [aiPromptDraft, setAiPromptDraft] = useState('')
+  const [aiPromptTemplateId, setAiPromptTemplateId] = useState<string>('')
+  const [aiSafeMode, setAiSafeMode] = useState(false)
+  const [aiOfflineMode, setAiOfflineMode] = useState(false)
+  const [aiTemperature, setAiTemperature] = useState(0.7)
+  const [aiPriority, setAiPriority] = useState<'low' | 'normal' | 'high'>('normal')
+  const [aiProviderHint, setAiProviderHint] = useState<string | undefined>(undefined)
+  const [aiVariant, setAiVariant] = useState<'A' | 'B'>('A')
+  const [aiPendingResults, setAiPendingResults] = useState<Record<string, PendingAiResult>>({})
+  const [aiHistory, setAiHistory] = useState<AiHistoryEntry[]>([])
+  const [aiActiveController, setAiActiveController] = useState<AbortController | null>(null)
+  const [aiFeedback, setAiFeedback] = useState<Record<string, 'like' | 'dislike' | undefined>>({})
+  const [cardVersions, setCardVersions] = useState<Record<string, Card[]>>({})
+  const [aiAutoSavePending, setAiAutoSavePending] = useState(false)
+  const [aiAlerted, setAiAlerted] = useState(false)
+  const [aiPromptTouched, setAiPromptTouched] = useState(false)
+  const providerOptions = useMemo(() => {
+    const raw = import.meta.env.VITE_AI_PROVIDERS
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as Array<{ name?: string }>
+        const names = parsed
+          .map((item) => item?.name)
+          .filter((name): name is string => typeof name === 'string' && name.length > 0)
+        if (names.length) {
+          return names
+        }
+      } catch (error) {
+        console.warn('No se pudo interpretar VITE_AI_PROVIDERS', error)
+      }
+    }
+    if (import.meta.env.VITE_AI_BASE_URL) {
+      return ['principal']
+    }
+    return []
+  }, [])
+
+  const isAiError = (error: unknown): error is { kind: AiErrorKind } =>
+    typeof error === 'object' && error !== null && 'kind' in error
+
+  const basePromptSuggestion = useMemo(() => {
+    if (!project || !selectedCard) {
+      return ''
+    }
+    const segments: string[] = []
+    segments.push(`Proyecto: ${project.name}.`)
+    segments.push(
+      `Contexto del mundo: ${project.gameContext.description || 'sin descripción'}. Estilo: ${project.gameContext.artStyle || 'sin definir'}.`,
+    )
+    segments.push(
+      `Carta actual: ${JSON.stringify({
+        title: selectedCard.title,
+        type: selectedCard.type,
+        value: selectedCard.value,
+        action: selectedCard.action,
+        actionDescription: selectedCard.actionDescription,
+        context: selectedCard.context,
+        imageDescription: selectedCard.imageDescription,
+        icons: selectedCard.icons,
+      })}.`,
+    )
+    segments.push('Objetivo: optimiza claridad narrativa, equilibrio mecánico y consistencia temática sin romper reglas existentes.')
+    segments.push('Valida reglas internas: longitud mínima de la narrativa (60 caracteres), unicidad de iconos y coherencia con el título.')
+    if (aiVariant === 'B') {
+      segments.push('Variante B activa: prioriza originalidad controlada y propuestas alternativas para pruebas A/B.')
+    }
+    if (aiPriority === 'high') {
+      segments.push('Prioridad alta: evita ambigüedades y devuelve contenido listo para producción sin huecos.')
+    }
+    const feedbackState = selectedCard ? aiFeedback[selectedCard.id] : undefined
+    if (feedbackState === 'dislike') {
+      segments.push('El usuario no quedó conforme anteriormente. Evita redundancias y aporta matices nuevos en tono y mecánicas.')
+    }
+    return segments.join(' ')
+  }, [aiFeedback, aiPriority, aiVariant, project, selectedCard])
+
+  useEffect(() => {
+    setAiPromptTouched(false)
+  }, [selectedCard?.id])
+
+  useEffect(() => {
+    if (!selectedCard) return
+    setAiPromptDraft((prev) => {
+      if (aiPromptTouched && prev.trim().length > 0) {
+        return prev
+      }
+      return basePromptSuggestion
+    })
+  }, [aiPromptTouched, basePromptSuggestion, selectedCard])
 
   const cards = useMemo(() => {
     if (!project) return []
@@ -77,6 +179,38 @@ const Editor = () => {
     return project.cards[selectedCardId] ?? null
   }, [project, selectedCardId])
 
+  const pendingForSelected = selectedCard ? aiPendingResults[selectedCard.id] ?? null : null
+
+  const recommendedPrompts = useMemo(() => {
+    if (!selectedCard) return []
+    const prompts: string[] = []
+    const typeLower = selectedCard.type.toLowerCase()
+    if (typeLower.includes('hechizo') || typeLower.includes('magia')) {
+      prompts.push('Refuerza la sensación arcana destacando consecuencias y riesgos del hechizo.')
+    }
+    if (typeLower.includes('personaje') || typeLower.includes('héroe')) {
+      prompts.push('Describe motivaciones del personaje y cómo su acción impacta a aliados y enemigos.')
+    }
+    if (!selectedCard.icons.length) {
+      prompts.push('Sugiere iconografía distintiva que facilite la lectura en mesa sin sobrecargar la carta.')
+    }
+    if (project?.gameContext.isStyleLocked) {
+      prompts.push('Mantén estrictamente el estilo artístico y terminología oficial del proyecto.')
+    }
+    return prompts.slice(0, 3)
+  }, [project, selectedCard])
+
+  const tokenEstimate = useMemo(() => {
+    const words = aiPromptDraft.trim().split(/\s+/).filter(Boolean).length
+    return Math.max(20, Math.round(words * 1.3))
+  }, [aiPromptDraft])
+
+  const quotaHint = useMemo(() => {
+    const usage = tokenEstimate > 700 ? 'alto' : tokenEstimate > 300 ? 'moderado' : 'bajo'
+    const priorityNote = aiPriority === 'high' ? 'Prioridad alta: reserva cuota premium.' : ''
+    return `${priorityNote} Consumo estimado ${usage}.`
+  }, [aiPriority, tokenEstimate])
+
   useEffect(() => {
     if (!projectId) return
 
@@ -89,13 +223,23 @@ const Editor = () => {
       setLoading(true)
       try {
         const data = await loadProject(projectId)
+        const normalizedAssets = {
+          ...getDefaultAssets(),
+          ...(data.assets ?? {}),
+        }
+        const pendingFromProject = normalizedAssets.aiState?.pendingResults ?? []
+        const pendingMap = pendingFromProject.reduce<Record<string, PendingAiResult>>((acc, item) => {
+          acc[item.cardId] = item
+          return acc
+        }, {})
+        setAiPendingResults(pendingMap)
         if (!active) {
           return
         }
         setProject({
           ...data,
           gameContext: data.gameContext ?? getDefaultContext(),
-          assets: data.assets ?? getDefaultAssets(),
+          assets: normalizedAssets,
         })
         if (!active) {
           return
@@ -157,6 +301,21 @@ const Editor = () => {
     return () => clearInterval(interval)
   }, [dirty, handleSave, isSaving, project, projectId])
 
+  useEffect(() => {
+    if (!aiAutoSavePending) return
+    handleSave().catch(console.error)
+    setAiAutoSavePending(false)
+  }, [aiAutoSavePending, handleSave])
+
+  useEffect(() => {
+    if (aiMetrics.rollingErrorRate > 0.4 && !aiAlerted) {
+      showError('Alerta: la tasa de error de la IA es elevada. Activa el modo seguro o espera unos minutos.')
+      setAiAlerted(true)
+    } else if (aiMetrics.rollingErrorRate < 0.2 && aiAlerted) {
+      setAiAlerted(false)
+    }
+  }, [aiAlerted, aiMetrics.rollingErrorRate, showError])
+
   const updateCardState = (card: Card) => {
     setProject((prev) => {
       if (!prev) return prev
@@ -170,6 +329,24 @@ const Editor = () => {
     })
     setDirty(true)
   }
+
+  const syncPendingResults = useCallback((next: Record<string, PendingAiResult>) => {
+    setAiPendingResults(next)
+    setProject((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        assets: {
+          ...prev.assets,
+          aiState: {
+            pendingResults: Object.values(next),
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      }
+    })
+    setDirty(true)
+  }, [])
 
   const handleContextChange = (nextContext: Project['gameContext']) => {
     setProject((prev) => (prev ? { ...prev, gameContext: nextContext } : prev))
@@ -229,36 +406,166 @@ const Editor = () => {
     }
   }
 
-  const handleGenerateText = async () => {
-    if (!selectedCard || !project) return
-    setIsGeneratingText(true)
-    try {
-      const contextSummary = `Proyecto: ${project.name}. Contexto: ${project.gameContext.description}. Estilo: ${project.gameContext.artStyle}. Carta actual: ${JSON.stringify({ ...selectedCard, icons: selectedCard.icons })}`
-      const completion = await generateJSON<CardCompletion>(
-        `${contextSummary}\nGenera o ajusta los campos de la carta manteniendo coherencia temática y balance. Devuelve solo JSON válido.`,
-        cardSchema,
-        {
-          systemPrompt:
-            'Eres un diseñador de juegos que redacta cartas equilibradas y temáticas. Mantén coherencia narrativa y devuelve solo JSON.',
-        },
-      )
-      const merged: Card = {
-        ...selectedCard,
-        ...completion,
-        icons: completion.icons ?? selectedCard.icons,
+  const handleGenerateText = useCallback(
+    async (options?: { retry?: boolean; focusFields?: Array<keyof Card> }) => {
+      if (!selectedCard || !project) return
+      if (aiOfflineMode) {
+        showInfo('El modo offline está activo. Desactívalo para usar la IA.')
+        return
       }
-      updateCardState(merged)
-    } catch (err) {
-      console.error(err)
-      showError('No se pudo generar contenido con IA.')
-    } finally {
-      setIsGeneratingText(false)
-    }
-  }
+
+      const controller = new AbortController()
+      setAiActiveController(controller)
+      setIsGeneratingText(true)
+
+      const focusFields = options?.focusFields ?? []
+      const template = promptTemplates.find((item) => item.id === aiPromptTemplateId)
+      const focusInstruction =
+        focusFields.length > 0
+          ? `Prioriza los campos: ${focusFields.join(', ')}. Los demás solo se ajustan si es imprescindible.`
+          : 'Revisa todos los campos asegurando consistencia general.'
+      const retryInstruction = options?.retry
+        ? 'Esta es una reejecución manual, evita repetir texto literal y propone variaciones útiles.'
+        : ''
+      const priorityInstruction =
+        aiPriority === 'high'
+          ? 'Responde con mensajes concisos listos para producción, sin notas adicionales.'
+          : aiPriority === 'low'
+            ? 'Puedes proponer ideas alternativas o ganchos narrativos opcionales.'
+            : 'Mantén un equilibrio entre claridad y creatividad.'
+
+      const prompt = [
+        aiPromptDraft.trim() || basePromptSuggestion,
+        focusInstruction,
+        retryInstruction,
+        priorityInstruction,
+      ]
+        .filter(Boolean)
+        .join('\n')
+
+      const historyId = `history_${Date.now()}`
+      const traceId = (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `trace_${Date.now()}`)
+      const promptType = aiSafeMode ? 'card-json-safe' : 'card-json'
+      const baseRetryCount = aiHistory.find((entry) => entry.cardId === selectedCard.id)?.retryCount ?? 0
+      const newHistoryEntry: AiHistoryEntry = {
+        id: historyId,
+        cardId: selectedCard.id,
+        prompt,
+        result: null,
+        success: false,
+        error: undefined,
+        createdAt: Date.now(),
+        provider: undefined,
+        promptType,
+        retryCount: options?.retry ? baseRetryCount + 1 : 0,
+      }
+      setAiHistory((prev) => [newHistoryEntry, ...prev].slice(0, 20))
+
+      try {
+        const timeout = aiPriority === 'high' ? 25_000 : aiPriority === 'low' ? 45_000 : undefined
+        const response = await generateJSON<CardCompletion>(prompt, cardSchema, {
+          systemPrompt:
+            'Eres un diseñador de juegos que devuelve exclusivamente JSON válido, equilibrado y coherente para cartas de Cardforge.',
+          signal: controller.signal,
+          safeMode: aiSafeMode,
+          temperature: aiTemperature,
+          providerHint: aiProviderHint,
+          promptTemplate: template?.prompt,
+          promptTemplateId: aiPromptTemplateId || undefined,
+          allowCache: !options?.retry,
+          timeoutMs: timeout,
+          promptMetadata: {
+            promptType,
+            cardId: selectedCard.id,
+            traceId,
+            variant: aiVariant,
+            priority: aiPriority,
+          },
+        })
+
+        const { sanitized, report, quality } = validateCardCompletion(selectedCard, response.data)
+
+        const pending: PendingAiResult = {
+          cardId: selectedCard.id,
+          completion: sanitized,
+          validation: report,
+          quality,
+          prompt,
+          provider: response.provider,
+          promptTemplateId: aiPromptTemplateId || undefined,
+          traceId,
+          receivedAt: Date.now(),
+          promptType,
+          metadata: {
+            focusFields,
+            priority: aiPriority,
+            variant: aiVariant,
+          },
+        }
+
+        const nextPending = { ...aiPendingResults, [selectedCard.id]: pending }
+        syncPendingResults(nextPending)
+        setAiHistory((prev) =>
+          prev.map((entry) =>
+            entry.id === historyId
+              ? { ...entry, success: true, result: pending, provider: response.provider }
+              : entry,
+          ),
+        )
+        setAiFeedback((prev) => ({ ...prev, [selectedCard.id]: undefined }))
+        showInfo('Revisa la vista previa antes de aplicar los cambios generados por la IA.')
+      } catch (err) {
+        console.error(err)
+        const message = isAiError(err)
+          ? mapErrorToUiMessage(err)
+          : err instanceof Error
+            ? err.message
+            : 'No se pudo generar contenido con IA.'
+        showError(message)
+        setAiHistory((prev) =>
+          prev.map((entry) =>
+            entry.id === historyId
+              ? { ...entry, error: message, success: false }
+              : entry,
+          ),
+        )
+      } finally {
+        setIsGeneratingText(false)
+        setAiActiveController(null)
+      }
+    },
+    [
+      aiHistory,
+      aiOfflineMode,
+      aiPendingResults,
+      aiPriority,
+      aiPromptDraft,
+      aiPromptTemplateId,
+      aiSafeMode,
+      aiTemperature,
+      aiVariant,
+      basePromptSuggestion,
+      promptTemplates,
+      project,
+      selectedCard,
+      showError,
+      showInfo,
+      syncPendingResults,
+      aiProviderHint,
+    ],
+  )
 
   const handleGenerateImage = async () => {
     if (!selectedCard || !project) return
+    if (aiOfflineMode) {
+      showInfo('El modo offline está activo. Desactívalo para generar imágenes con IA.')
+      return
+    }
     setIsGeneratingImage(true)
+    const controller = new AbortController()
+    setAiActiveController(controller)
     try {
       const promptSegments: string[] = []
 
@@ -288,18 +595,121 @@ const Editor = () => {
 
       const prompt = promptSegments.join(' ')
 
-      const base64 = await generateImageBase64(prompt)
+      const response = await generateImageBase64(prompt, {
+        signal: controller.signal,
+        providerHint: aiProviderHint,
+        promptMetadata: {
+          promptType: 'card-image',
+          cardId: selectedCard.id,
+          priority: aiPriority,
+        },
+        timeoutMs: aiPriority === 'high' ? 35_000 : undefined,
+      })
+      const base64 = response.data
       updateCardState({ ...selectedCard, imageUrl: base64 })
     } catch (err) {
       console.error(err)
-      const message =
-        err instanceof Error
+      const message = isAiError(err)
+        ? `No se pudo generar la imagen: ${mapErrorToUiMessage(err)}`
+        : err instanceof Error
           ? `No se pudo generar la imagen: ${err.message}`
           : 'No se pudo generar la imagen.'
       showError(message)
     } finally {
       setIsGeneratingImage(false)
+      setAiActiveController(null)
     }
+  }
+
+  const handleCancelAi = () => {
+    if (aiActiveController) {
+      aiActiveController.abort()
+      setAiActiveController(null)
+      showInfo('Operación de IA cancelada por el usuario.')
+    }
+  }
+
+  const handleManualRetry = () => {
+    handleGenerateText({ retry: true }).catch(console.error)
+  }
+
+  const handleApplyAiResult = (fields: Array<keyof Card>, overrides: Partial<Card>) => {
+    if (!selectedCard) return
+    const pending = aiPendingResults[selectedCard.id]
+    if (!pending) return
+
+    const previousCard: Card = { ...selectedCard }
+    const sanitized = { ...pending.completion, ...overrides }
+
+    const nextCard: Card = { ...selectedCard }
+
+    fields.forEach((field) => {
+      if (field === 'icons') {
+        const value = sanitized.icons ?? selectedCard.icons
+        nextCard.icons = Array.isArray(value)
+          ? value
+          : typeof value === 'string'
+            ? value
+                .split(',')
+                .map((token) => token.trim())
+                .filter(Boolean)
+            : selectedCard.icons
+      } else if (typeof sanitized[field] === 'string') {
+        nextCard[field] = sanitized[field] as string
+      }
+    })
+
+    if (!fields.includes('icons')) {
+      nextCard.icons = sanitized.icons ?? selectedCard.icons
+    }
+
+    setCardVersions((prev) => {
+      const history = prev[selectedCard.id] ?? []
+      return {
+        ...prev,
+        [selectedCard.id]: [previousCard, ...history].slice(0, 5),
+      }
+    })
+
+    updateCardState(nextCard)
+
+    const nextPending = { ...aiPendingResults }
+    delete nextPending[selectedCard.id]
+    syncPendingResults(nextPending)
+    setAiAutoSavePending(true)
+    showInfo('Los cambios se aplicaron correctamente. Guardaremos automáticamente en unos segundos.')
+  }
+
+  const handleDiscardAiResult = () => {
+    if (!selectedCard) return
+    const nextPending = { ...aiPendingResults }
+    delete nextPending[selectedCard.id]
+    syncPendingResults(nextPending)
+  }
+
+  const handleFeedback = (feedback: 'like' | 'dislike') => {
+    if (!selectedCard) return
+    setAiFeedback((prev) => ({ ...prev, [selectedCard.id]: feedback }))
+    if (feedback === 'dislike') {
+      setAiPromptDraft((prev) =>
+        `${prev}\nObservación del usuario: evita redundancias y refuerza la coherencia temática.`,
+      )
+      setAiPromptTouched(true)
+    }
+  }
+
+  const handleContinueGeneration = (fields: Array<keyof Card>) => {
+    handleGenerateText({ retry: true, focusFields: fields }).catch(console.error)
+  }
+
+  const handleRevertCard = () => {
+    if (!selectedCard) return
+    const history = cardVersions[selectedCard.id]
+    if (!history?.length) return
+    const [previous, ...rest] = history
+    updateCardState(previous)
+    setCardVersions((prev) => ({ ...prev, [selectedCard.id]: rest }))
+    showInfo('Se restauró la versión anterior de la carta.')
   }
 
   const handleUploadCardImage = async (file: File) => {
@@ -394,13 +804,56 @@ const Editor = () => {
         onRename={handleRenameProject}
         onSave={handleSave}
         onNewCard={handleAddCard}
-        onGenerateText={handleGenerateText}
+        onGenerateText={() => handleGenerateText().catch(console.error)}
         onGenerateImage={handleGenerateImage}
         onDelete={handleDeleteProject}
-        disableGenerate={!selectedCard}
+        disableGenerate={!selectedCard || aiOfflineMode}
         isSaving={isSaving}
         isGeneratingText={isGeneratingText}
         isGeneratingImage={isGeneratingImage}
+        onCancelAi={handleCancelAi}
+        onManualRetry={handleManualRetry}
+        canCancel={Boolean(aiActiveController)}
+      />
+
+      <AiControlPanel
+        promptDraft={aiPromptDraft}
+        onPromptChange={(value) => {
+          setAiPromptDraft(value)
+          setAiPromptTouched(true)
+        }}
+        onGenerateText={() => handleGenerateText().catch(console.error)}
+        onGenerateImage={handleGenerateImage}
+        onCancel={handleCancelAi}
+        onManualRetry={handleManualRetry}
+        isGeneratingText={isGeneratingText}
+        isGeneratingImage={isGeneratingImage}
+        hasOngoingRequest={Boolean(aiActiveController)}
+        safeMode={aiSafeMode}
+        onSafeModeChange={setAiSafeMode}
+        offlineMode={aiOfflineMode}
+        onOfflineModeChange={setAiOfflineMode}
+        temperature={aiTemperature}
+        onTemperatureChange={setAiTemperature}
+        tokenEstimate={tokenEstimate}
+        quotaHint={quotaHint}
+        promptTemplates={promptTemplates}
+        selectedTemplateId={aiPromptTemplateId}
+        onSelectTemplate={setAiPromptTemplateId}
+        recommendedPrompts={recommendedPrompts}
+        hasPendingReview={Boolean(pendingForSelected)}
+        onApplyTemplatePrompt={(prompt) => {
+          setAiPromptDraft(prompt)
+          setAiPromptTouched(true)
+        }}
+        history={aiHistory}
+        priority={aiPriority}
+        onPriorityChange={setAiPriority}
+        providerOptions={providerOptions}
+        providerHint={aiProviderHint}
+        onProviderHintChange={setAiProviderHint}
+        variant={aiVariant}
+        onVariantChange={setAiVariant}
       />
 
       <section className="grid gap-6 lg:grid-cols-[300px_1fr]">
@@ -438,6 +891,8 @@ const Editor = () => {
                   onChange={updateCardState}
                   onDelete={() => handleDeleteCard(selectedCard.id)}
                   onUploadImage={handleUploadCardImage}
+                  onRevert={handleRevertCard}
+                  canRevert={(cardVersions[selectedCard.id] ?? []).length > 0}
                 />
               ) : (
                 <p className="text-sm text-slate-400">Selecciona una carta para editarla.</p>
@@ -448,6 +903,18 @@ const Editor = () => {
               <IconGenerator context={project.gameContext} onInsertIcons={handleInsertIcons} />
             </div>
           </div>
+
+          <AiPendingReview
+            pending={pendingForSelected}
+            currentCard={selectedCard}
+            onApply={handleApplyAiResult}
+            onDiscard={handleDiscardAiResult}
+            onFeedback={handleFeedback}
+            feedback={selectedCard ? aiFeedback[selectedCard.id] : undefined}
+            onContinueGeneration={handleContinueGeneration}
+            history={aiHistory}
+            context={project.gameContext}
+          />
 
           <section className="rounded-xl border border-slate-800 bg-slate-800/60 p-4">
             <header className="mb-4">

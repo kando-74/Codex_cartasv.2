@@ -15,6 +15,14 @@ export interface AssetMeta {
 export interface ProjectAssets {
   referenceImages: AssetMeta[]
   availableIcons: AssetMeta[]
+  /**
+   * Estado auxiliar sincronizado con la colaboración asistida por IA. Permite que varias sesiones
+   * continúen un flujo de generación sin perder los resultados pendientes.
+   */
+  aiState?: {
+    pendingResults: PendingAiResult[]
+    updatedAt: string
+  }
 }
 
 export interface Card {
@@ -57,4 +65,161 @@ export interface JSONSchema {
   items?: unknown
   required?: string[]
   additionalProperties?: boolean
+}
+
+export type AiErrorKind =
+  | 'timeout'
+  | 'quota'
+  | 'auth'
+  | 'rate_limit'
+  | 'network'
+  | 'invalid_response'
+  | 'aborted'
+  | 'content_policy'
+  | 'unknown'
+
+export interface AiProviderConfig {
+  name: string
+  baseUrl: string
+  apiKey: string
+  model?: string
+  imageModel?: string
+  imageSize?: string
+  priority?: number
+  maxRetries?: number
+  safeMode?: boolean
+  /** Tiempo base en milisegundos para calcular el backoff exponencial. */
+  retryDelayMs?: number
+  /** Multiplicador aplicado en cada intento para el cálculo de backoff. */
+  retryBackoffMultiplier?: number
+  /** Límite máximo de espera entre reintentos en milisegundos. */
+  maxRetryDelayMs?: number
+  /** Porcentaje de jitter aplicado sobre el backoff para evitar thundering herd. */
+  retryJitterRatio?: number
+}
+
+export interface AiRequestMetadata {
+  promptType: string
+  cardId?: string
+  traceId?: string
+  variant?: string
+  priority?: 'low' | 'normal' | 'high'
+  providerHint?: string
+}
+
+export interface AiValidationIssue {
+  field: keyof Card | 'general'
+  type: 'error' | 'warning'
+  message: string
+  suggestion?: string
+}
+
+export interface AiValidationReport {
+  isValid: boolean
+  issues: AiValidationIssue[]
+  suggestions: string[]
+  businessRules: string[]
+  appliedFilters: string[]
+  sensitiveContent?: boolean
+}
+
+export interface AiQualityScore {
+  score: number
+  reasons: string[]
+  heuristics: Record<string, number>
+}
+
+export interface PendingAiResult {
+  cardId: string
+  completion: Partial<Card>
+  validation: AiValidationReport
+  quality: AiQualityScore
+  prompt: string
+  provider?: string
+  promptTemplateId?: string
+  traceId: string
+  receivedAt: number
+  promptType: string
+  metadata?: Record<string, unknown>
+}
+
+export interface AiHistoryEntry {
+  id: string
+  cardId: string
+  prompt: string
+  result: PendingAiResult | null
+  success: boolean
+  error?: string
+  createdAt: number
+  provider?: string
+  promptType: string
+  retryCount: number
+}
+
+export interface AiPromptTemplate {
+  id: string
+  name: string
+  description: string
+  prompt: string
+  recommendedFor?: string[]
+}
+
+export interface AiMetricsSnapshot {
+  totals: {
+    requests: number
+    successes: number
+    failures: number
+  }
+  byPromptType: Record<
+    string,
+    {
+      successes: number
+      failures: number
+      averageLatencyMs: number
+      lastError?: {
+        kind: AiErrorKind
+        message: string
+        at: number
+      }
+    }
+  >
+  byProvider: Record<
+    string,
+    {
+      successes: number
+      failures: number
+      averageLatencyMs: number
+      lastLatencyMs?: number
+      availability: 'online' | 'degraded' | 'offline'
+    }
+  >
+  lastUpdatedAt: number
+  rollingErrorRate: number
+}
+
+export interface AiStatusSnapshot {
+  latencyMs: number
+  provider: string
+  availability: 'online' | 'degraded' | 'offline'
+  updatedAt: number
+}
+
+export interface AiPromptRecord {
+  id: string
+  prompt: string
+  promptType: string
+  provider?: string
+  successCount: number
+  failureCount: number
+  lastUsedAt: number
+  lastQualityScore?: number
+}
+
+export interface AiCacheEntry<T> {
+  key: string
+  promptType: string
+  data: T
+  createdAt: number
+  provider: string
+  traceId: string
 }

@@ -1,6 +1,6 @@
 import { FormEvent, useState } from 'react'
-import { generateJSON } from '../services/ai'
-import type { GameContext, JSONSchema } from '../types'
+import { generateJSON, mapErrorToUiMessage } from '../services/ai'
+import type { AiErrorKind, GameContext, JSONSchema } from '../types'
 import { useErrorToasts } from './ErrorToastContext'
 
 interface IconGeneratorProps {
@@ -38,7 +38,11 @@ const IconGenerator = ({ context, onInsertIcons }: IconGeneratorProps) => {
   const [prompt, setPrompt] = useState('Genera 5 iconos memorables relacionados con el tema actual.')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<IconResponse | null>(null)
+  const [provider, setProvider] = useState<string | null>(null)
   const { showError } = useErrorToasts()
+
+  const isAiError = (error: unknown): error is { kind: AiErrorKind } =>
+    typeof error === 'object' && error !== null && 'kind' in error
 
   const handleGenerate = async (event: FormEvent) => {
     event.preventDefault()
@@ -51,12 +55,19 @@ const IconGenerator = ({ context, onInsertIcons }: IconGeneratorProps) => {
         {
           systemPrompt:
             'Eres un generador de ideas de iconografía para juegos de cartas. Devuelve únicamente JSON válido con iconos descriptivos.',
+          promptMetadata: { promptType: 'icon-suggestions' },
         },
       )
-      setResult(response)
+      setResult(response.data)
+      setProvider(response.provider)
     } catch (err) {
       console.error(err)
-      showError(err instanceof Error ? err.message : 'Error generando iconos')
+      const message = isAiError(err)
+        ? mapErrorToUiMessage(err)
+        : err instanceof Error
+          ? err.message
+          : 'Error generando iconos'
+      showError(message)
     } finally {
       setLoading(false)
     }
@@ -81,6 +92,9 @@ const IconGenerator = ({ context, onInsertIcons }: IconGeneratorProps) => {
       </form>
       {result ? (
         <div className="flex flex-col gap-3">
+          {provider ? (
+            <p className="text-xs text-slate-500">Proveedor: {provider}</p>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             {result.icons.map((icon) => (
               <span key={icon} className="rounded-full bg-slate-700/70 px-2 py-1 text-xs text-slate-100">

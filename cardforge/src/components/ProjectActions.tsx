@@ -12,6 +12,9 @@ interface ProjectActionsProps {
   isSaving?: boolean
   isGeneratingText?: boolean
   isGeneratingImage?: boolean
+  onCancelAi?: () => void
+  onManualRetry?: () => void
+  canCancel?: boolean
 }
 
 const ProjectActions = ({
@@ -26,6 +29,9 @@ const ProjectActions = ({
   isSaving,
   isGeneratingText,
   isGeneratingImage,
+  onCancelAi,
+  onManualRetry,
+  canCancel,
 }: ProjectActionsProps) => {
   const [tempName, setTempName] = useState(name)
   const [renaming, setRenaming] = useState(false)
@@ -101,6 +107,22 @@ const ProjectActions = ({
           className="bg-indigo-600 px-4 py-2 hover:bg-indigo-700 disabled:opacity-60"
         >
           {isGeneratingImage ? 'Generando...' : 'Generar imagen (IA)'}
+        </button>
+        <button
+          type="button"
+          onClick={() => onManualRetry?.()}
+          disabled={disableGenerate}
+          className="bg-slate-700 px-4 py-2 hover:bg-slate-600 disabled:opacity-50"
+        >
+          Reintentar manual
+        </button>
+        <button
+          type="button"
+          onClick={() => onCancelAi?.()}
+          disabled={!canCancel}
+          className="bg-red-600 px-4 py-2 hover:bg-red-700 disabled:opacity-50"
+        >
+          Cancelar IA
         </button>
       </div>
     </section>
