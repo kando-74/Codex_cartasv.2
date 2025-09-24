@@ -4,7 +4,9 @@ import CardForm from '../components/CardForm'
 import CardPreview from '../components/CardPreview'
 import GameContextForm from '../components/GameContextForm'
 import IconGenerator from '../components/IconGenerator'
+import Loader from '../components/Loader'
 import ProjectActions from '../components/ProjectActions'
+import { useErrorToasts } from '../components/ErrorToastContext'
 import { generateImageBase64, generateJSON } from '../services/ai'
 import {
   addCard,
@@ -56,11 +58,12 @@ const Editor = () => {
   const [project, setProject] = useState<Project | null>(null)
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [isGeneratingText, setIsGeneratingText] = useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const { showError, showInfo } = useErrorToasts()
 
   const cards = useMemo(() => {
     if (!project) return []
@@ -102,13 +105,14 @@ const Editor = () => {
         if (!active) {
           return
         }
-        setError(null)
+        setLoadError(null)
       } catch (err) {
         console.error(err)
         if (!active) {
           return
         }
-        setError('No se pudo cargar el proyecto.')
+        setLoadError('No se pudo cargar el proyecto.')
+        showError('No se pudo cargar el proyecto. Comprueba tu conexión e inténtalo de nuevo.')
       } finally {
         if (active) {
           setLoading(false)
@@ -121,7 +125,7 @@ const Editor = () => {
     return () => {
       active = false
     }
-  }, [projectId])
+  }, [projectId, showError])
 
   const handleSave = useCallback(async () => {
     if (!projectId || !project || isSaving) return
@@ -137,11 +141,11 @@ const Editor = () => {
       setProject((prev) => (prev ? { ...prev, updatedAt: new Date() } : prev))
     } catch (err) {
       console.error(err)
-      setError('No se pudo guardar el proyecto.')
+      showError('No se pudo guardar el proyecto.')
     } finally {
       setIsSaving(false)
     }
-  }, [isSaving, project, projectId])
+  }, [isSaving, project, projectId, showError])
 
   useEffect(() => {
     if (!project || !projectId) return
@@ -189,7 +193,7 @@ const Editor = () => {
       setSelectedCardId(newCard.id)
     } catch (err) {
       console.error(err)
-      setError('No se pudo crear la carta.')
+      showError('No se pudo crear la carta.')
     }
   }
 
@@ -207,9 +211,10 @@ const Editor = () => {
       if (selectedCardId === cardId) {
         setSelectedCardId(null)
       }
+      showInfo('La carta se eliminó correctamente.')
     } catch (err) {
       console.error(err)
-      setError('No se pudo eliminar la carta.')
+      showError('No se pudo eliminar la carta.')
     }
   }
 
@@ -220,7 +225,7 @@ const Editor = () => {
       await updateProject(projectId, { name: newName })
     } catch (err) {
       console.error(err)
-      setError('No se pudo renombrar el proyecto.')
+      showError('No se pudo renombrar el proyecto.')
     }
   }
 
@@ -245,7 +250,7 @@ const Editor = () => {
       updateCardState(merged)
     } catch (err) {
       console.error(err)
-      setError('No se pudo generar contenido con IA.')
+      showError('No se pudo generar contenido con IA.')
     } finally {
       setIsGeneratingText(false)
     }
@@ -291,7 +296,7 @@ const Editor = () => {
         err instanceof Error
           ? `No se pudo generar la imagen: ${err.message}`
           : 'No se pudo generar la imagen.'
-      setError(message)
+      showError(message)
     } finally {
       setIsGeneratingImage(false)
     }
@@ -319,9 +324,10 @@ const Editor = () => {
     try {
       await deleteProject(projectId)
       navigate('/')
+      showInfo('Proyecto eliminado correctamente.')
     } catch (err) {
       console.error(err)
-      setError('No se pudo eliminar el proyecto.')
+      showError('No se pudo eliminar el proyecto.')
     }
   }
 
@@ -356,18 +362,22 @@ const Editor = () => {
       form.reset()
     } catch (err) {
       console.error(err)
-      setError('No se pudo subir la referencia.')
+      showError('No se pudo subir la referencia.')
     }
   }
 
   if (loading) {
-    return <div className="flex min-h-screen items-center justify-center text-slate-300">Cargando editor...</div>
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-900 p-6">
+        <Loader message="Cargando editor..." />
+      </div>
+    )
   }
 
-  if (error) {
+  if (loadError) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-900 p-6 text-center text-red-400">
-        <p>{error}</p>
+        <p>{loadError}</p>
         <button type="button" onClick={() => navigate('/')}>Volver</button>
       </div>
     )

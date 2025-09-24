@@ -7,6 +7,8 @@ import {
   renameProject,
 } from '../services/projects'
 import type { ProjectListItem } from '../types'
+import { useErrorToasts } from '../components/ErrorToastContext'
+import Loader from '../components/Loader'
 
 const formatDate = (date?: Date) =>
   date ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeStyle: 'short' }).format(date) : 'Sin fecha'
@@ -17,12 +19,12 @@ const MIN_PROJECT_NAME_LENGTH = 3
 const ProjectsList = () => {
   const [projects, setProjects] = useState<ProjectListItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
   const [nameTouched, setNameTouched] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [renamingValue, setRenamingValue] = useState('')
+  const { showError, showInfo } = useErrorToasts()
   const navigate = useNavigate()
   const isActiveRef = useRef(true)
   const projectNameInputRef = useRef<HTMLInputElement | null>(null)
@@ -73,23 +75,18 @@ const ProjectsList = () => {
           return
         }
         setProjects(data)
-        if (!isActive()) {
-          return
-        }
-        setError(null)
       } catch (err) {
         console.error(err)
-        if (!isActive()) {
-          return
+        if (isActive()) {
+          showError('No se pudieron cargar los proyectos. Intenta de nuevo en unos segundos.')
         }
-        setError('No se pudieron cargar los proyectos.')
       } finally {
         if (isActive()) {
           setLoading(false)
         }
       }
     },
-    [],
+    [showError],
   )
 
   useEffect(() => {
@@ -132,7 +129,7 @@ const ProjectsList = () => {
     } catch (err) {
       console.error(err)
       if (isActiveRef.current) {
-        setError('No se pudo crear el proyecto.')
+        showError('No se pudo crear el proyecto. Verifica tu conexión e inténtalo nuevamente.')
       }
     } finally {
       if (isActiveRef.current) {
@@ -161,7 +158,7 @@ const ProjectsList = () => {
     } catch (err) {
       console.error(err)
       if (isActiveRef.current) {
-        setError('No se pudo renombrar el proyecto.')
+        showError('No se pudo renombrar el proyecto.')
       }
     }
   }
@@ -176,10 +173,11 @@ const ProjectsList = () => {
         return
       }
       await loadProjects()
+      showInfo('El proyecto se eliminó correctamente.')
     } catch (err) {
       console.error(err)
       if (isActiveRef.current) {
-        setError('No se pudo eliminar el proyecto.')
+        showError('No se pudo eliminar el proyecto.')
       }
     }
   }
@@ -225,14 +223,12 @@ const ProjectsList = () => {
         </form>
       </header>
 
-      {error ? (
-        <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-red-300">{error}</div>
-      ) : null}
-
       <section className="flex flex-1 flex-col gap-4">
         <h2 className="text-xl text-slate-200">Tus proyectos</h2>
         {loading ? (
-          <div className="rounded-lg border border-slate-800 bg-slate-800/40 p-6 text-slate-400">Cargando proyectos...</div>
+          <div className="flex min-h-[160px] items-center justify-center rounded-lg border border-slate-800 bg-slate-800/40">
+            <Loader message="Cargando proyectos..." />
+          </div>
         ) : hasProjects ? (
           <ul className="grid gap-4 sm:grid-cols-2">
             {projects.map((project) => {

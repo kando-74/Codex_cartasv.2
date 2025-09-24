@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react'
 import { generateJSON } from '../services/ai'
 import type { GameContext, JSONSchema } from '../types'
+import { useErrorToasts } from './ErrorToastContext'
 
 interface IconGeneratorProps {
   context: GameContext
@@ -37,12 +38,11 @@ const IconGenerator = ({ context, onInsertIcons }: IconGeneratorProps) => {
   const [prompt, setPrompt] = useState('Genera 5 iconos memorables relacionados con el tema actual.')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<IconResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { showError } = useErrorToasts()
 
   const handleGenerate = async (event: FormEvent) => {
     event.preventDefault()
     setLoading(true)
-    setError(null)
     try {
       const contextSummary = `Descripción: ${context.description || 'sin descripción'}. Estilo: ${context.artStyle || 'libre'}.`
       const response = await generateJSON<IconResponse>(
@@ -56,7 +56,7 @@ const IconGenerator = ({ context, onInsertIcons }: IconGeneratorProps) => {
       setResult(response)
     } catch (err) {
       console.error(err)
-      setError(err instanceof Error ? err.message : 'Error generando iconos')
+      showError(err instanceof Error ? err.message : 'Error generando iconos')
     } finally {
       setLoading(false)
     }
@@ -79,7 +79,6 @@ const IconGenerator = ({ context, onInsertIcons }: IconGeneratorProps) => {
           {loading ? 'Generando...' : 'Generar iconos'}
         </button>
       </form>
-      {error ? <p className="text-sm text-red-400">{error}</p> : null}
       {result ? (
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap gap-2">
