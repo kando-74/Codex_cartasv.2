@@ -22,11 +22,11 @@ import {
   uploadImage,
 } from '../services/projects'
 // IA
-import { getDefaultPromptTemplates, useAiMetrics, validateCardCompletion } from '../lib/ai';
+import { getDefaultPromptTemplates, useAiMetrics, validateCardCompletion } from '../lib/ai'
 
 // Card sizes / settings (de main)
-import { cloneCardSize, CUSTOM_CARD_SIZE_ID, findMatchingPresetId } from '../lib/cardSizes';
-import { getDefaultCardSizeSetting } from '../lib/settings';
+import { cloneCardSize, CUSTOM_CARD_SIZE_ID, findMatchingPresetId } from '../lib/cardSizes'
+import { getDefaultCardSizeSetting } from '../lib/settings'
 
 // Tipos (unificados en una sola línea de import type)
 import type {
@@ -37,7 +37,7 @@ import type {
   JSONSchema,
   PendingAiResult,
   Project,
-} from '../types';
+} from '../types'
 
 
 const cardSchema: JSONSchema = {
@@ -293,11 +293,8 @@ const Editor = () => {
         setProject({
           ...data,
           gameContext: data.gameContext ?? getDefaultContext(),
-gameContext: data.gameContext ?? getDefaultContext(),
-assets: normalizedAssets ?? (data.assets ?? getDefaultAssets()),
-cards: normalizedCards,
-
-
+          assets: normalizedAssets,
+          cards: normalizedCards,
         })
         if (!active) {
           return
