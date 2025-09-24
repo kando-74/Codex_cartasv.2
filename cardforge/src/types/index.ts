@@ -304,3 +304,101 @@ export interface AiCacheEntry<T> {
   provider: string
   traceId: string
 }
+
+export interface McpToolDefinition {
+  name: string
+  description?: string
+  inputSchema?: JSONSchema
+  outputSchema?: JSONSchema
+}
+
+export interface McpSessionState {
+  sessionId: string
+  workspaceId?: string
+  connectedAt: number
+  expiresAt?: number
+  availableTools: McpToolDefinition[]
+  capabilities?: string[]
+}
+
+export type TemplateCommandOperation =
+  | {
+      type: 'add_element'
+      element: TemplateElement
+    }
+  | {
+      type: 'update_element'
+      elementId: string
+      changes: Partial<TemplateElement>
+    }
+  | {
+      type: 'delete_element'
+      elementId: string
+    }
+  | {
+      type: 'reorder_element'
+      elementId: string
+      index: number
+    }
+  | {
+      type: 'set_template'
+      changes: Partial<
+        Pick<Template, 'name' | 'width' | 'height' | 'background' | 'showGrid' | 'visibility'>
+      >
+    }
+  | {
+      type: 'focus_element'
+      elementId: string
+    }
+
+export interface McpCommandResponse {
+  message?: string
+  operations?: TemplateCommandOperation[]
+  toolCalls?: Array<{
+    tool: string
+    arguments?: Record<string, unknown> | null
+    result?: unknown
+  }>
+  debug?: Record<string, unknown>
+  warnings?: string[]
+  state?: Partial<McpSessionState>
+}
+
+export interface McpCommandLogEntry {
+  id: string
+  prompt: string
+  status: 'pending' | 'success' | 'error'
+  createdAt: number
+  durationMs?: number
+  response?: McpCommandResponse
+  error?: string
+  provider?: string
+  applied?: boolean
+}
+
+export interface McpCommandContext {
+  template: {
+    id: string
+    name: string
+    width: number
+    height: number
+    background: string
+    showGrid: boolean
+    visibility: TemplateVisibility
+    elementCount: number
+    elements: Array<
+      Pick<TemplateElement, 'id' | 'type' | 'name' | 'x' | 'y' | 'width' | 'height' | 'rotation' | 'visible' | 'locked'> & {
+        config: Record<string, unknown>
+      }
+    >
+  }
+  selectedElementId?: string | null
+}
+
+export interface McpPreferences {
+  baseUrl: string
+  apiKey?: string
+  workspaceId: string
+  autoApplyOperations: boolean
+  sendTemplateContext: boolean
+}
