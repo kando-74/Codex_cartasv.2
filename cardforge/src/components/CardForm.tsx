@@ -8,9 +8,11 @@ export interface CardFormProps {
   onChange: (card: Card) => void
   onDelete?: () => void
   onUploadImage?: (file: File) => Promise<{ url: string; path: string }>
+  onRevert?: () => void
+  canRevert?: boolean
 }
 
-const CardForm = ({ card, onChange, onDelete, onUploadImage }: CardFormProps) => {
+const CardForm = ({ card, onChange, onDelete, onUploadImage, onRevert, canRevert }: CardFormProps) => {
   const [iconsValue, setIconsValue] = useState(card.icons.join(', '))
   const [uploading, setUploading] = useState(false)
 
@@ -219,11 +221,23 @@ const CardForm = ({ card, onChange, onDelete, onUploadImage }: CardFormProps) =>
         </label>
         {uploading ? <p className="text-sm text-slate-400">Subiendo imagen...</p> : null}
       </div>
-      {onDelete ? (
-        <button type="button" onClick={onDelete} className="bg-red-600 hover:bg-red-700">
-          Eliminar carta
-        </button>
-      ) : null}
+      <div className="flex flex-wrap gap-2">
+        {onDelete ? (
+          <button type="button" onClick={onDelete} className="bg-red-600 hover:bg-red-700">
+            Eliminar carta
+          </button>
+        ) : null}
+        {onRevert ? (
+          <button
+            type="button"
+            onClick={onRevert}
+            disabled={!canRevert}
+            className="bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-600 disabled:opacity-50"
+          >
+            Revertir a versión previa
+          </button>
+        ) : null}
+      </div>
     </div>
   )
 }

@@ -30,6 +30,10 @@ const defaultGameContext: GameContext = {
 const defaultAssets: ProjectAssets = {
   referenceImages: [],
   availableIcons: [],
+  aiState: {
+    pendingResults: [],
+    updatedAt: new Date(0).toISOString(),
+  },
 }
 
 const deleteStorageAssets = async (paths: Array<string | undefined>): Promise<void> => {
@@ -112,6 +116,10 @@ export const getDefaultContext = (): GameContext => ({ ...defaultGameContext })
 export const getDefaultAssets = (): ProjectAssets => ({
   referenceImages: [...defaultAssets.referenceImages],
   availableIcons: [...defaultAssets.availableIcons],
+  aiState: {
+    pendingResults: [...(defaultAssets.aiState?.pendingResults ?? [])],
+    updatedAt: new Date().toISOString(),
+  },
 })
 
 export async function createProject(name: string): Promise<Project> {
@@ -124,7 +132,7 @@ export async function createProject(name: string): Promise<Project> {
     name,
     gameContext: { ...defaultGameContext },
     cards: {},
-    assets: { ...defaultAssets },
+    assets: getDefaultAssets(),
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }
@@ -135,7 +143,7 @@ export async function createProject(name: string): Promise<Project> {
     name,
     gameContext: { ...defaultGameContext },
     cards: {},
-    assets: { ...defaultAssets },
+    assets: getDefaultAssets(),
     createdAt: now,
     updatedAt: now,
   }
