@@ -9,6 +9,7 @@ import {
 import type { ProjectListItem } from '../types'
 import { useErrorToasts } from '../components/ErrorToastContext'
 import Loader from '../components/Loader'
+import SettingsPanel from '../components/SettingsPanel'
 
 const formatDate = (date?: Date) =>
   date ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeStyle: 'short' }).format(date) : 'Sin fecha'
@@ -222,6 +223,8 @@ const ProjectsList = () => {
           </button>
         </form>
       </header>
+
+      <SettingsPanel />
 
       <section className="flex flex-1 flex-col gap-4">
         <h2 className="text-xl text-slate-200">Tus proyectos</h2>
