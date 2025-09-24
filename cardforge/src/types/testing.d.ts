@@ -1,13 +1,15 @@
 export {}
 
+type VitestImport = typeof import('vitest')
+
 declare global {
-  const describe: (...args: any[]) => void
-  const it: (...args: any[]) => void
-  const test: (...args: any[]) => void
-  const expect: (...args: any[]) => any
-  const beforeEach: (...args: any[]) => void
-  const afterEach: (...args: any[]) => void
-  const beforeAll: (...args: any[]) => void
-  const afterAll: (...args: any[]) => void
-  const vi: any
+  const describe: VitestImport['describe']
+  const it: VitestImport['it']
+  const test: VitestImport['test']
+  const expect: VitestImport['expect']
+  const beforeEach: VitestImport['beforeEach']
+  const afterEach: VitestImport['afterEach']
+  const beforeAll: VitestImport['beforeAll']
+  const afterAll: VitestImport['afterAll']
+  const vi: VitestImport['vi']
 }

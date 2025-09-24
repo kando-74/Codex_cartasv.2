@@ -4,6 +4,13 @@ import TemplatePreview from '../components/template/TemplatePreview'
 import Loader from '../components/Loader'
 import { useErrorToasts } from '../components/ErrorToastContext'
 import {
+  buildExportFileName,
+  exportTemplateAsJson,
+  exportTemplateAsPdf,
+  exportTemplateAsPng,
+  type PdfPageSizeKey,
+} from '../lib/templateExport'
+import {
   createTemplate,
   listTemplates,
   loadTemplate,
@@ -124,6 +131,13 @@ const TemplateEditor = () => {
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [zoom, setZoom] = useState(0.75)
+  const [pngScale, setPngScale] = useState(2)
+  const [pdfCopies, setPdfCopies] = useState(9)
+  const [pdfColumns, setPdfColumns] = useState(3)
+  const [pdfRows, setPdfRows] = useState(3)
+  const [pdfMargin, setPdfMargin] = useState(5)
+  const [pdfPageSize, setPdfPageSize] = useState<PdfPageSizeKey>('A4')
+  const [exporting, setExporting] = useState<null | 'png' | 'pdf' | 'json'>(null)
 
   const selectedElement = useMemo(() => {
     if (!currentTemplate || !selectedElementId) {
@@ -131,6 +145,12 @@ const TemplateEditor = () => {
     }
     return currentTemplate.elements.find((element) => element.id === selectedElementId) ?? null
   }, [currentTemplate, selectedElementId])
+
+  const createExportFileName = useCallback(
+    (extension: string, suffix?: string) =>
+      buildExportFileName(currentTemplate?.name ?? 'plantilla', extension, suffix),
+    [currentTemplate?.name],
+  )
 
   const loadTemplatesList = useCallback(async () => {
     setLoadingList(true)
@@ -474,6 +494,105 @@ const TemplateEditor = () => {
       showError('No se pudo guardar la plantilla. Intenta nuevamente.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handlePngScaleChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const parsed = Number(event.target.value)
+    if (!Number.isFinite(parsed)) {
+      return
+    }
+    const value = clampNumber(parsed, 1, 4)
+    setPngScale(Number(value.toFixed(2)))
+  }
+
+  const handlePdfNumberChange = (field: 'copies' | 'columns' | 'rows') =>
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const parsed = Number(event.target.value)
+      if (!Number.isFinite(parsed)) {
+        return
+      }
+      if (field === 'copies') {
+        const value = clampNumber(Math.round(parsed), 1, 999)
+        setPdfCopies(value)
+        return
+      }
+      const value = clampNumber(Math.round(parsed), 1, 6)
+      if (field === 'columns') {
+        setPdfColumns(value)
+      } else {
+        setPdfRows(value)
+      }
+    }
+
+  const handlePdfMarginChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const parsed = Number(event.target.value)
+    if (!Number.isFinite(parsed)) {
+      return
+    }
+    const value = clampNumber(parsed, 0, 30)
+    setPdfMargin(Number(value.toFixed(1)))
+  }
+
+  const handlePdfPageSizeChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    setPdfPageSize(event.target.value as PdfPageSizeKey)
+  }
+
+  const handleExportPng = async () => {
+    if (!currentTemplate || exporting) {
+      return
+    }
+    setExporting('png')
+    try {
+      const fileName = createExportFileName('png')
+      await exportTemplateAsPng(currentTemplate, fileName, { scale: pngScale })
+      showInfo('PNG generado correctamente.')
+    } catch (error) {
+      console.error(error)
+      showError('No se pudo exportar la plantilla a PNG.')
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  const handleExportPdf = async () => {
+    if (!currentTemplate || exporting) {
+      return
+    }
+    setExporting('pdf')
+    try {
+      const fileName = createExportFileName('pdf')
+      await exportTemplateAsPdf(currentTemplate, fileName, {
+        copies: pdfCopies,
+        columns: pdfColumns,
+        rows: pdfRows,
+        pageSize: pdfPageSize,
+        marginMm: pdfMargin,
+        scale: Math.max(2, pngScale),
+      })
+      showInfo('PDF generado correctamente.')
+    } catch (error) {
+      console.error(error)
+      showError('No se pudo exportar la plantilla a PDF.')
+    } finally {
+      setExporting(null)
+    }
+  }
+
+  const handleExportJson = () => {
+    if (!currentTemplate || exporting) {
+      return
+    }
+    setExporting('json')
+    try {
+      const fileName = createExportFileName('json')
+      exportTemplateAsJson(currentTemplate, fileName)
+      showInfo('JSON exportado correctamente.')
+    } catch (error) {
+      console.error(error)
+      showError('No se pudo exportar la plantilla a JSON.')
+    } finally {
+      setExporting(null)
     }
   }
 
@@ -900,6 +1019,136 @@ const TemplateEditor = () => {
               </header>
               <div className="mt-4">
                 <TemplatePreview template={currentTemplate} />
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+              <header className="flex flex-col gap-1 text-left sm:flex-row sm:items-center sm:justify-between">
+                <h3 className="text-base font-semibold">Exportaciones</h3>
+                <p className="text-xs text-slate-400">
+                  Descarga la plantilla como imagen, PDF multipágina o JSON estructurado.
+                </p>
+              </header>
+              <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                  <h4 className="text-sm font-semibold text-slate-100">PNG individual</h4>
+                  <p className="text-xs text-slate-400">
+                    Genera un archivo PNG con la resolución original o aumentada.
+                  </p>
+                  <label className="flex flex-col gap-1 text-xs">
+                    Escala
+                    <input
+                      type="number"
+                      min={1}
+                      max={4}
+                      step={0.25}
+                      value={pngScale}
+                      onChange={handlePngScaleChange}
+                      className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                    />
+                    <span className="text-[11px] text-slate-500">
+                      Usa valores mayores para exportaciones de alta resolución (p. ej. 2 = 200%).
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleExportPng}
+                    disabled={exporting !== null}
+                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {exporting === 'png' ? 'Generando…' : 'Descargar PNG'}
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                  <h4 className="text-sm font-semibold text-slate-100">PDF multipágina</h4>
+                  <p className="text-xs text-slate-400">
+                    Organiza varias copias por hoja para imprimir o producir barajas completas.
+                  </p>
+                  <div className="grid grid-cols-3 gap-3 text-xs">
+                    <label className="flex flex-col gap-1">
+                      Total cartas
+                      <input
+                        type="number"
+                        min={1}
+                        max={999}
+                        value={pdfCopies}
+                        onChange={handlePdfNumberChange('copies')}
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      Columnas
+                      <input
+                        type="number"
+                        min={1}
+                        max={6}
+                        value={pdfColumns}
+                        onChange={handlePdfNumberChange('columns')}
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      Filas
+                      <input
+                        type="number"
+                        min={1}
+                        max={6}
+                        value={pdfRows}
+                        onChange={handlePdfNumberChange('rows')}
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <label className="flex flex-col gap-1">
+                      Tamaño de página
+                      <select
+                        value={pdfPageSize}
+                        onChange={handlePdfPageSizeChange}
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      >
+                        <option value="A4">A4 (210 × 297 mm)</option>
+                        <option value="Letter">Carta (8.5 × 11 in)</option>
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      Margen (mm)
+                      <input
+                        type="number"
+                        min={0}
+                        max={30}
+                        step={0.5}
+                        value={pdfMargin}
+                        onChange={handlePdfMarginChange}
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExportPdf}
+                    disabled={exporting !== null}
+                    className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {exporting === 'pdf' ? 'Generando…' : 'Descargar PDF'}
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                  <h4 className="text-sm font-semibold text-slate-100">JSON estructurado</h4>
+                  <p className="text-xs text-slate-400">
+                    Obtén la definición íntegra de la plantilla para integraciones o backups.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleExportJson}
+                    disabled={exporting !== null}
+                    className="mt-auto rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-medium text-slate-100 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {exporting === 'json' ? 'Generando…' : 'Descargar JSON'}
+                  </button>
+                </div>
               </div>
             </section>
           </form>
