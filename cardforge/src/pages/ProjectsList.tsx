@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   createProject,
   deleteProject,
@@ -185,10 +185,18 @@ const ProjectsList = () => {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 p-6">
-      <header className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-800/60 p-6">
-        <div>
-          <h1 className="text-3xl">Cardforge</h1>
-          <p className="text-slate-400">Gestiona tus proyectos de cartas y entra al editor.</p>
+      <header className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-800/60 p-6">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-3xl">Cardforge</h1>
+            <p className="text-slate-400">Gestiona tus proyectos de cartas y entra al editor.</p>
+          </div>
+          <Link
+            to="/templates"
+            className="inline-flex items-center justify-center rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/20"
+          >
+            Abrir editor de plantillas
+          </Link>
         </div>
         <form onSubmit={handleCreate} className="flex flex-col gap-3 sm:flex-row sm:items-end">
           <label className="flex flex-1 flex-col gap-1">

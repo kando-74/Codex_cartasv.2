@@ -6,6 +6,7 @@ import Loader from './components/Loader'
 import { ensureUser } from './lib/firebase'
 import Editor from './pages/Editor'
 import ProjectsList from './pages/ProjectsList'
+import TemplateEditor from './pages/TemplateEditor'
 
 const AppContent = () => {
   const [isReady, setIsReady] = useState(false)
@@ -57,6 +58,7 @@ const AppContent = () => {
         <Routes>
           <Route path="/" element={<ProjectsList />} />
           <Route path="/p/:projectId" element={<Editor />} />
+          <Route path="/templates" element={<TemplateEditor />} />
         </Routes>
       </ErrorBoundary>
     </div>
