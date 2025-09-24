@@ -1,10 +1,13 @@
 import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import {
+  archiveProject,
   createProject,
   deleteProject,
+  duplicateProject,
   listProjects,
   renameProject,
+  restoreProject,
 } from '../services/projects'
 import type { ProjectListItem } from '../types'
 import { useErrorToasts } from '../components/ErrorToastContext'
@@ -25,6 +28,13 @@ const ProjectsList = () => {
   const [nameTouched, setNameTouched] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [renamingValue, setRenamingValue] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'archived'>('all')
+  const [minCards, setMinCards] = useState('')
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null)
+  const [statusAction, setStatusAction] = useState<
+    { id: string; type: 'archive' | 'restore' } | null
+  >(null)
   const { showError, showInfo } = useErrorToasts()
   const navigate = useNavigate()
   const isActiveRef = useRef(true)
@@ -41,6 +51,39 @@ const ProjectsList = () => {
     () => trimmedProjectName.toLocaleLowerCase('es-ES'),
     [trimmedProjectName],
   )
+  const trimmedSearchTerm = useMemo(
+    () => searchTerm.trim().toLocaleLowerCase('es-ES'),
+    [searchTerm],
+  )
+  const minCardsNumber = useMemo(() => {
+    const value = Number(minCards)
+    if (Number.isNaN(value) || value <= 0) {
+      return 0
+    }
+    return Math.floor(value)
+  }, [minCards])
+  const hasActiveFilters = useMemo(
+    () => trimmedSearchTerm.length > 0 || statusFilter !== 'all' || minCardsNumber > 0,
+    [trimmedSearchTerm, statusFilter, minCardsNumber],
+  )
+  const filteredProjects = useMemo(
+    () =>
+      projects.filter((project) => {
+        const matchesSearch =
+          trimmedSearchTerm.length === 0 ||
+          project.name.toLocaleLowerCase('es-ES').includes(trimmedSearchTerm)
+        const matchesStatus =
+          statusFilter === 'all'
+            ? true
+            : statusFilter === 'archived'
+            ? Boolean(project.archivedAt)
+            : !project.archivedAt
+        const matchesCardCount = project.cardCount >= minCardsNumber
+        return matchesSearch && matchesStatus && matchesCardCount
+      }),
+    [projects, trimmedSearchTerm, statusFilter, minCardsNumber],
+  )
+  const hasFilteredProjects = filteredProjects.length > 0
   const isProjectNameEmpty = trimmedProjectName.length === 0
   const isProjectNameTooShort =
     trimmedProjectName.length > 0 && trimmedProjectName.length < MIN_PROJECT_NAME_LENGTH
@@ -101,6 +144,12 @@ const ProjectsList = () => {
       isActiveRef.current = false
     }
   }, [loadProjects])
+
+  const resetFilters = useCallback(() => {
+    setSearchTerm('')
+    setStatusFilter('all')
+    setMinCards('')
+  }, [])
 
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault()
@@ -163,6 +212,98 @@ const ProjectsList = () => {
       }
     }
   }
+
+  const handleDuplicate = useCallback(
+    async (project: ProjectListItem) => {
+      const projectName = project.name
+      try {
+        setDuplicatingId(project.id)
+        const copy = await duplicateProject(project.id)
+        if (!isActiveRef.current) {
+          return
+        }
+        await loadProjects()
+        if (!isActiveRef.current) {
+          return
+        }
+        showInfo(`Se duplicó "${projectName}" como "${copy.name}".`)
+        navigate(`/p/${copy.id}`)
+      } catch (err) {
+        console.error(err)
+        if (isActiveRef.current) {
+          showError('No se pudo duplicar el proyecto.')
+        }
+      } finally {
+        if (isActiveRef.current) {
+          setDuplicatingId(null)
+        }
+      }
+    },
+    [loadProjects, navigate, showError, showInfo],
+  )
+
+  const handleArchive = useCallback(
+    async (project: ProjectListItem) => {
+      const projectName = project.name
+      if (
+        !confirm(
+          '¿Archivar este proyecto? Podrás restaurarlo cuando quieras desde esta pantalla.',
+        )
+      ) {
+        return
+      }
+      try {
+        setStatusAction({ id: project.id, type: 'archive' })
+        await archiveProject(project.id)
+        if (!isActiveRef.current) {
+          return
+        }
+        await loadProjects()
+        if (!isActiveRef.current) {
+          return
+        }
+        showInfo(`"${projectName}" se archivó correctamente.`)
+      } catch (err) {
+        console.error(err)
+        if (isActiveRef.current) {
+          showError('No se pudo archivar el proyecto.')
+        }
+      } finally {
+        if (isActiveRef.current) {
+          setStatusAction(null)
+        }
+      }
+    },
+    [loadProjects, showError, showInfo],
+  )
+
+  const handleRestore = useCallback(
+    async (project: ProjectListItem) => {
+      const projectName = project.name
+      try {
+        setStatusAction({ id: project.id, type: 'restore' })
+        await restoreProject(project.id)
+        if (!isActiveRef.current) {
+          return
+        }
+        await loadProjects()
+        if (!isActiveRef.current) {
+          return
+        }
+        showInfo(`"${projectName}" se restauró correctamente.`)
+      } catch (err) {
+        console.error(err)
+        if (isActiveRef.current) {
+          showError('No se pudo restaurar el proyecto.')
+        }
+      } finally {
+        if (isActiveRef.current) {
+          setStatusAction(null)
+        }
+      }
+    },
+    [loadProjects, showError, showInfo],
+  )
 
   const handleDelete = async (projectId: string) => {
     if (!confirm('¿Eliminar este proyecto? Esta acción no se puede deshacer.')) {
@@ -234,6 +375,57 @@ const ProjectsList = () => {
 
       <SettingsPanel />
 
+      <section className="flex flex-col gap-4 rounded-lg border border-slate-800 bg-slate-800/40 p-4">
+        <h2 className="text-lg font-semibold text-slate-200">Buscar y filtrar proyectos</h2>
+        <div className="grid gap-4 md:grid-cols-3">
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-slate-300">Buscar por nombre</span>
+            <input
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Ej. Mazmorra Arcana"
+              aria-label="Buscar proyectos por nombre"
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-slate-300">Estado</span>
+            <select
+              value={statusFilter}
+              onChange={(event) =>
+                setStatusFilter(event.target.value as 'all' | 'active' | 'archived')
+              }
+            >
+              <option value="all">Todos</option>
+              <option value="active">Solo activos</option>
+              <option value="archived">Archivados</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-sm font-medium text-slate-300">Cartas mínimas</span>
+            <input
+              type="number"
+              min={0}
+              inputMode="numeric"
+              value={minCards}
+              onChange={(event) => setMinCards(event.target.value)}
+              placeholder="0"
+            />
+            <span className="text-xs text-slate-400">
+              Muestra proyectos con al menos esta cantidad de cartas.
+            </span>
+          </label>
+        </div>
+        {hasActiveFilters ? (
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="self-start text-sm font-medium text-primary hover:underline"
+          >
+            Limpiar filtros
+          </button>
+        ) : null}
+      </section>
+
       <section className="flex flex-1 flex-col gap-4">
         <h2 className="text-xl text-slate-200">Tus proyectos</h2>
         {loading ? (
@@ -241,80 +433,140 @@ const ProjectsList = () => {
             <Loader message="Cargando proyectos..." />
           </div>
         ) : hasProjects ? (
-          <ul className="grid gap-4 sm:grid-cols-2">
-            {projects.map((project) => {
-              const isEditing = editingId === project.id
-              return (
-                <li
-                  key={project.id}
-                  className="flex flex-col gap-3 rounded-lg border border-slate-800 bg-slate-800/60 p-4 shadow-lg"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1">
-                      {isEditing ? (
-                        <input
-                          autoFocus
-                          value={renamingValue}
-                          onChange={(event) => setRenamingValue(event.target.value)}
-                          className="w-full"
-                        />
-                      ) : (
-                        <h3 className="text-lg text-white">{project.name}</h3>
-                      )}
-                      <p className="text-sm text-slate-400">
-                        Última edición: {formatDate(project.updatedAt)} · {project.cardCount} cartas
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="bg-slate-700 px-3 py-1 text-sm"
-                      onClick={() => navigate(`/p/${project.id}`)}
-                    >
-                      Abrir
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-sm">
-                    {isEditing ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => confirmRename(project.id)}
-                          className="bg-primary px-3 py-1"
-                        >
-                          Guardar nombre
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingId(null)
-                            setRenamingValue('')
-                          }}
-                          className="bg-slate-700 px-3 py-1"
-                        >
-                          Cancelar
-                        </button>
-                      </>
-                    ) : (
+          hasFilteredProjects ? (
+            <ul className="grid gap-4 sm:grid-cols-2">
+              {filteredProjects.map((project) => {
+                const isEditing = editingId === project.id
+                const isDuplicating = duplicatingId === project.id
+                const isStatusUpdating = statusAction?.id === project.id
+                const isArchiving = isStatusUpdating && statusAction?.type === 'archive'
+                const isRestoring = isStatusUpdating && statusAction?.type === 'restore'
+                const isArchived = Boolean(project.archivedAt)
+                const cardCountLabel = project.cardCount === 1 ? 'carta' : 'cartas'
+                return (
+                  <li
+                    key={project.id}
+                    className={`flex flex-col gap-3 rounded-lg border p-4 shadow-lg transition ${
+                      isArchived
+                        ? 'border-amber-600/60 bg-slate-800/40'
+                        : 'border-slate-800 bg-slate-800/60'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              value={renamingValue}
+                              onChange={(event) => setRenamingValue(event.target.value)}
+                              className="w-full sm:w-auto"
+                            />
+                          ) : (
+                            <h3 className="text-lg text-white">{project.name}</h3>
+                          )}
+                          {isArchived ? (
+                            <span className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-300">
+                              Archivado
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="text-sm text-slate-400">
+                          Última edición: {formatDate(project.updatedAt)} · {project.cardCount}{' '}
+                          {cardCountLabel}
+                        </p>
+                        {isArchived ? (
+                          <p className="text-xs text-amber-200">
+                            Archivado el {formatDate(project.archivedAt ?? undefined)}
+                          </p>
+                        ) : null}
+                      </div>
                       <button
                         type="button"
-                        onClick={() => startRename(project)}
-                        className="bg-slate-700 px-3 py-1"
+                        className="bg-slate-700 px-3 py-1 text-sm hover:bg-slate-600"
+                        onClick={() => navigate(`/p/${project.id}`)}
                       >
-                        Renombrar
+                        Abrir
                       </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(project.id)}
-                      className="bg-red-600 px-3 py-1 hover:bg-red-700"
-                    >
-                      Eliminar
-                    </button>
-                  </div>
-                </li>
-              )
-            })}
-          </ul>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-sm">
+                      {isEditing ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => confirmRename(project.id)}
+                            className="bg-primary px-3 py-1 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={isStatusUpdating || isDuplicating}
+                          >
+                            Guardar nombre
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingId(null)
+                              setRenamingValue('')
+                            }}
+                            className="bg-slate-700 px-3 py-1 disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={isStatusUpdating || isDuplicating}
+                          >
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => startRename(project)}
+                          className="bg-slate-700 px-3 py-1 hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isStatusUpdating || isDuplicating}
+                        >
+                          Renombrar
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDuplicate(project)}
+                        className="bg-slate-700 px-3 py-1 hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isDuplicating || isStatusUpdating}
+                      >
+                        {isDuplicating ? 'Duplicando...' : 'Duplicar'}
+                      </button>
+                      {isArchived ? (
+                        <button
+                          type="button"
+                          onClick={() => handleRestore(project)}
+                          className="bg-emerald-600 px-3 py-1 hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isDuplicating || isStatusUpdating}
+                        >
+                          {isRestoring ? 'Restaurando...' : 'Restaurar'}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleArchive(project)}
+                          className="bg-amber-600 px-3 py-1 hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isDuplicating || isStatusUpdating}
+                        >
+                          {isArchiving ? 'Archivando...' : 'Archivar'}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(project.id)}
+                        className="bg-red-600 px-3 py-1 hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isDuplicating || isStatusUpdating}
+                      >
+                        Eliminar
+                      </button>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          ) : (
+            <div className="rounded-lg border border-slate-800 bg-slate-800/40 p-6 text-slate-400">
+              No hay proyectos que coincidan con los filtros actuales.
+            </div>
+          )
         ) : (
           <div className="rounded-lg border border-slate-800 bg-slate-800/40 p-6 text-slate-400">
             No tienes proyectos aún. ¡Crea el primero!

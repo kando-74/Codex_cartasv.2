@@ -21,6 +21,13 @@ const COLLECTION = 'projects'
 
 const generateId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 10)}`
 
+const deepClone = <T>(value: T): T => {
+  if (value === undefined) {
+    return value
+  }
+  return JSON.parse(JSON.stringify(value)) as T
+}
+
 const defaultGameContext: GameContext = {
   description: '',
   artStyle: '',
@@ -90,6 +97,12 @@ const mapProjectDoc = (snapshot: DocumentSnapshot<DocumentData>): Project => {
     typeof data.createdAt?.toDate === 'function' ? (data.createdAt.toDate() as Date) : undefined
   const updatedAt =
     typeof data.updatedAt?.toDate === 'function' ? (data.updatedAt.toDate() as Date) : undefined
+  const archivedAt =
+    typeof data.archivedAt?.toDate === 'function'
+      ? (data.archivedAt.toDate() as Date)
+      : data.archivedAt === null
+      ? null
+      : undefined
 
   return {
     id: snapshot.id,
@@ -100,6 +113,7 @@ const mapProjectDoc = (snapshot: DocumentSnapshot<DocumentData>): Project => {
     assets: (data.assets as ProjectAssets) ?? { ...defaultAssets },
     createdAt,
     updatedAt,
+    archivedAt,
   }
 }
 
@@ -133,6 +147,7 @@ export async function createProject(name: string): Promise<Project> {
     gameContext: { ...defaultGameContext },
     cards: {},
     assets: getDefaultAssets(),
+    archivedAt: null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }
@@ -144,6 +159,7 @@ export async function createProject(name: string): Promise<Project> {
     gameContext: { ...defaultGameContext },
     cards: {},
     assets: getDefaultAssets(),
+    archivedAt: null,
     createdAt: now,
     updatedAt: now,
   }
@@ -155,12 +171,20 @@ export async function listProjects(): Promise<ProjectListItem[]> {
   const snapshots = await getDocs(q)
   const projects = snapshots.docs.map((docSnap) => mapProjectDoc(docSnap))
   return projects
-    .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
+    .sort((a, b) => {
+      const aArchived = a.archivedAt ? 1 : 0
+      const bArchived = b.archivedAt ? 1 : 0
+      if (aArchived !== bArchived) {
+        return aArchived - bArchived
+      }
+      return (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0)
+    })
     .map((project) => ({
       id: project.id,
       name: project.name,
       updatedAt: project.updatedAt,
       cardCount: Object.keys(project.cards ?? {}).length,
+      archivedAt: project.archivedAt,
     }))
 }
 
@@ -240,6 +264,106 @@ export async function deleteProject(projectId: string): Promise<void> {
 
   await deleteStorageAssets(pathsToDelete)
   await deleteDoc(docRef)
+}
+
+const ensureUniqueCopyName = async (baseName: string): Promise<string> => {
+  const normalizedBase = baseName.toLocaleLowerCase('es-ES')
+  try {
+    const existingProjects = await listProjects()
+    const existingNames = new Set(
+      existingProjects.map((project) => project.name.toLocaleLowerCase('es-ES')),
+    )
+
+    if (!existingNames.has(normalizedBase)) {
+      return baseName
+    }
+
+    let counter = 2
+    while (counter < 1000) {
+      const candidate = `${baseName} ${counter}`
+      if (!existingNames.has(candidate.toLocaleLowerCase('es-ES'))) {
+        return candidate
+      }
+      counter += 1
+    }
+  } catch (error) {
+    console.warn('No se pudo verificar la unicidad del nombre al duplicar el proyecto.', error)
+  }
+
+  return `${baseName} ${Math.floor(Math.random() * 10_000)}`
+}
+
+export async function duplicateProject(projectId: string): Promise<Project> {
+  const user = await ensureUser()
+  const sourceRef = doc(db, COLLECTION, projectId)
+  const snapshot = await getDoc(sourceRef)
+
+  if (!snapshot.exists()) {
+    throw new Error('Proyecto original no encontrado')
+  }
+
+  const sourceProject = mapProjectDoc(snapshot)
+
+  if (sourceProject.ownerUid !== user.uid) {
+    throw new Error('No autorizado para duplicar este proyecto')
+  }
+
+  const baseName = `${sourceProject.name} (copia)`
+  const name = await ensureUniqueCopyName(baseName)
+
+  const gameContext = deepClone(sourceProject.gameContext)
+  const cards = deepClone(sourceProject.cards ?? {})
+  const assets = deepClone(sourceProject.assets ?? getDefaultAssets())
+
+  if (assets.aiState) {
+    assets.aiState.pendingResults = []
+    assets.aiState.updatedAt = new Date().toISOString()
+  }
+
+  const colRef = collection(db, COLLECTION)
+  const newDocRef = doc(colRef)
+  const now = new Date()
+
+  await setDoc(newDocRef, {
+    ownerUid: user.uid,
+    name,
+    gameContext,
+    cards,
+    assets,
+    archivedAt: null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  })
+
+  return {
+    id: newDocRef.id,
+    ownerUid: user.uid,
+    name,
+    gameContext,
+    cards,
+    assets,
+    archivedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+export async function archiveProject(projectId: string): Promise<void> {
+  await ensureUser()
+  const docRef = doc(db, COLLECTION, projectId)
+  await updateDoc(docRef, {
+    archivedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  })
+}
+
+export async function restoreProject(projectId: string): Promise<void> {
+  await ensureUser()
+  const docRef = doc(db, COLLECTION, projectId)
+  await updateDoc(docRef, {
+    archivedAt: null,
+    updatedAt: serverTimestamp(),
+  })
 }
 
 export interface AddCardInput extends Partial<Card> {
