@@ -1,3 +1,5 @@
+import { formatCardSize } from '../lib/cardSizes'
+import { getDefaultCardSizeSetting } from '../lib/settings'
 import type { Card, GameContext } from '../types'
 
 interface CardPreviewProps {
@@ -14,15 +16,31 @@ const CardPreview = ({ card, context }: CardPreviewProps) => {
     )
   }
 
+  const size = card.size ?? getDefaultCardSizeSetting()
+  const aspectRatio = size.height > 0 ? `${size.width} / ${size.height}` : undefined
+  const previewStyle = aspectRatio
+    ? { aspectRatio, height: '24rem', maxWidth: '100%' }
+    : { height: '24rem', maxWidth: '100%' }
+
   return (
-    <article className="relative h-96 w-full overflow-hidden rounded-xl border border-slate-700 bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 shadow-xl">
+    <article
+      className="relative w-full overflow-hidden rounded-xl border border-slate-700 bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 shadow-xl"
+      style={previewStyle}
+    >
       {card.imageUrl ? (
         <img src={card.imageUrl} alt={card.title} className="absolute inset-0 h-full w-full object-cover opacity-60" />
       ) : null}
       <div className="relative flex h-full flex-col justify-between p-6">
         <header className="flex items-center justify-between">
           <h3 className="text-2xl font-bold text-white drop-shadow">{card.title || 'Sin título'}</h3>
-          <span className="rounded-full bg-black/50 px-3 py-1 text-sm font-semibold text-white">{card.value || '0'}</span>
+          <div className="flex flex-col items-end gap-1">
+            <span className="rounded-full bg-black/50 px-3 py-1 text-sm font-semibold text-white">
+              {card.value || '0'}
+            </span>
+            <span className="rounded bg-black/40 px-2 py-0.5 text-[0.65rem] uppercase tracking-wide text-slate-200">
+              {formatCardSize(size)}
+            </span>
+          </div>
         </header>
         <div className="flex flex-col gap-2">
           <p className="text-sm uppercase tracking-wide text-slate-200">{card.type || 'Tipo'}</p>
@@ -40,8 +58,11 @@ const CardPreview = ({ card, context }: CardPreviewProps) => {
           </div>
         </div>
         <footer className="text-xs text-slate-300/60">
-          Estilo: {context.artStyle || 'Sin estilo definido'}
-          {context.isStyleLocked ? ' (bloqueado)' : ''}
+          <p>
+            Estilo: {context.artStyle || 'Sin estilo definido'}
+            {context.isStyleLocked ? ' (bloqueado)' : ''}
+          </p>
+          <p>Tamaño físico: {formatCardSize(size)}</p>
         </footer>
       </div>
     </article>

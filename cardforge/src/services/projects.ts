@@ -76,6 +76,7 @@ const createBaseCard = (): Card => ({
   imageUrl: undefined,
   imagePath: undefined,
   thumbPath: undefined,
+  size: undefined,
 })
 
 const mapProjectDoc = (snapshot: DocumentSnapshot<DocumentData>): Project => {
@@ -104,9 +105,10 @@ const mapProjectDoc = (snapshot: DocumentSnapshot<DocumentData>): Project => {
 
 export const sanitizeId = (value: string): string => value.replace(/[^a-zA-Z0-9_]/g, '_')
 
-export const createEmptyCard = (): Card => ({
+export const createEmptyCard = (size?: Card['size']): Card => ({
   ...createBaseCard(),
   id: generateId('card'),
+  size,
 })
 
 export const getDefaultContext = (): GameContext => ({ ...defaultGameContext })

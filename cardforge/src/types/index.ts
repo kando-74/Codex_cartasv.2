@@ -4,6 +4,13 @@ export interface GameContext {
   isStyleLocked: boolean
 }
 
+export interface CardSizeSetting {
+  width: number
+  height: number
+  unit?: 'mm'
+  presetId?: string
+}
+
 export interface AssetMeta {
   id: string
   name: string
@@ -38,6 +45,7 @@ export interface Card {
   imageUrl?: string
   imagePath?: string
   thumbPath?: string
+  size?: CardSizeSetting
 }
 
 export interface Project {

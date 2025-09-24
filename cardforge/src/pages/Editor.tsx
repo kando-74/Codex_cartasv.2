@@ -21,16 +21,24 @@ import {
   updateProject,
   uploadImage,
 } from '../services/projects'
-import { getDefaultPromptTemplates, useAiMetrics, validateCardCompletion } from '../lib/ai'
+// IA
+import { getDefaultPromptTemplates, useAiMetrics, validateCardCompletion } from '../lib/ai';
+
+// Card sizes / settings (de main)
+import { cloneCardSize, CUSTOM_CARD_SIZE_ID, findMatchingPresetId } from '../lib/cardSizes';
+import { getDefaultCardSizeSetting } from '../lib/settings';
+
+// Tipos (unificados en una sola línea de import type)
 import type {
-  AiErrorKind,
+  AirErrorKind,
   AiHistoryEntry,
   AiPromptTemplate,
   Card,
   JSONSchema,
   PendingAiResult,
   Project,
-} from '../types'
+} from '../types';
+
 
 const cardSchema: JSONSchema = {
   title: 'CardforgeCard',
@@ -61,6 +69,41 @@ type CardCompletion = {
   context?: string
   imageDescription?: string
   icons?: string[]
+}
+
+const normalizeCard = (card: Card, fallbackSize?: Card['size']): Card => {
+  const baseFallback = fallbackSize ? cloneCardSize(fallbackSize) : getDefaultCardSizeSetting()
+  const rawSize = card.size
+  let normalizedSize = baseFallback
+
+  if (rawSize) {
+    const width = Number(rawSize.width)
+    const height = Number(rawSize.height)
+    if (Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0) {
+      const matchedPreset = findMatchingPresetId(width, height)
+      let presetId: string | undefined
+      if (rawSize.presetId === CUSTOM_CARD_SIZE_ID) {
+        presetId = CUSTOM_CARD_SIZE_ID
+      } else if (rawSize.presetId && matchedPreset === rawSize.presetId) {
+        presetId = rawSize.presetId
+      } else if (matchedPreset) {
+        presetId = matchedPreset
+      } else {
+        presetId = CUSTOM_CARD_SIZE_ID
+      }
+      normalizedSize = {
+        presetId,
+        width,
+        height,
+        unit: rawSize.unit ?? 'mm',
+      }
+    }
+  }
+
+  return {
+    ...card,
+    size: normalizedSize,
+  }
 }
 
 const Editor = () => {
@@ -236,10 +279,25 @@ const Editor = () => {
         if (!active) {
           return
         }
+        const defaultCardSize = getDefaultCardSizeSetting()
+        const normalizedCards = Object.entries(data.cards ?? {}).reduce<Record<string, Card>>(
+          (accumulator, [cardId, rawCard]) => {
+            if (!rawCard) {
+              return accumulator
+            }
+            accumulator[cardId] = normalizeCard(rawCard, defaultCardSize)
+            return accumulator
+          },
+          {},
+        )
         setProject({
           ...data,
           gameContext: data.gameContext ?? getDefaultContext(),
-          assets: normalizedAssets,
+gameContext: data.gameContext ?? getDefaultContext(),
+assets: normalizedAssets ?? (data.assets ?? getDefaultAssets()),
+cards: normalizedCards,
+
+
         })
         if (!active) {
           return
@@ -317,13 +375,14 @@ const Editor = () => {
   }, [aiAlerted, aiMetrics.rollingErrorRate, showError])
 
   const updateCardState = (card: Card) => {
+    const normalized = normalizeCard(card)
     setProject((prev) => {
       if (!prev) return prev
       return {
         ...prev,
         cards: {
           ...prev.cards,
-          [card.id]: card,
+          [card.id]: normalized,
         },
       }
     })
@@ -356,18 +415,23 @@ const Editor = () => {
   const handleAddCard = async () => {
     if (!projectId) return
     try {
-      const newCard = await addCard(projectId, createEmptyCard())
+      const defaultCardSize = getDefaultCardSizeSetting()
+      const newCard = await addCard(
+        projectId,
+        createEmptyCard(cloneCardSize(defaultCardSize)),
+      )
+      const normalizedCard = normalizeCard(newCard, defaultCardSize)
       setProject((prev) => {
         if (!prev) return prev
         return {
           ...prev,
           cards: {
             ...prev.cards,
-            [newCard.id]: newCard,
+            [normalizedCard.id]: normalizedCard,
           },
         }
       })
-      setSelectedCardId(newCard.id)
+      setSelectedCardId(normalizedCard.id)
     } catch (err) {
       console.error(err)
       showError('No se pudo crear la carta.')
