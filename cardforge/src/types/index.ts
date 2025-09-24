@@ -32,6 +32,73 @@ export interface ProjectAssets {
   }
 }
 
+export type TemplateElementType = 'text' | 'rectangle' | 'image'
+
+export interface TemplateElementBase {
+  id: string
+  type: TemplateElementType
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  rotation: number
+  visible: boolean
+  locked: boolean
+}
+
+export interface TemplateTextElement extends TemplateElementBase {
+  type: 'text'
+  text: string
+  fontFamily: string
+  fontSize: number
+  fontWeight: number
+  color: string
+  align: 'left' | 'center' | 'right'
+}
+
+export interface TemplateRectangleElement extends TemplateElementBase {
+  type: 'rectangle'
+  fill: string
+  borderColor: string
+  borderWidth: number
+  borderRadius: number
+  opacity: number
+}
+
+export interface TemplateImageElement extends TemplateElementBase {
+  type: 'image'
+  fit: 'cover' | 'contain' | 'fill'
+  background: string
+  strokeColor: string
+  strokeWidth: number
+  placeholder?: string
+}
+
+export type TemplateElement =
+  | TemplateTextElement
+  | TemplateRectangleElement
+  | TemplateImageElement
+
+export interface Template {
+  id: string
+  ownerUid: string
+  name: string
+  width: number
+  height: number
+  background: string
+  showGrid: boolean
+  elements: TemplateElement[]
+  createdAt?: Date
+  updatedAt?: Date
+}
+
+export interface TemplateSummary {
+  id: string
+  name: string
+  updatedAt?: Date
+}
+
 export interface Card {
   id: string
   title: string
