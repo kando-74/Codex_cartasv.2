@@ -30,7 +30,7 @@ import { getDefaultCardSizeSetting } from '../lib/settings';
 
 // Tipos (unificados en una sola línea de import type)
 import type {
-  AirErrorKind,
+  AiErrorKind,
   AiHistoryEntry,
   AiPromptTemplate,
   Card,

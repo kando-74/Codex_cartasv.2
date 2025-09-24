@@ -66,6 +66,92 @@ export interface ProjectListItem {
   cardCount: number
 }
 
+export type TemplateVisibility = 'private' | 'public'
+
+export interface TemplateSlot {
+  id: string
+  name: string
+  type: 'text' | 'number' | 'icon' | 'image' | 'custom'
+  description?: string
+  required?: boolean
+  maxLength?: number
+  format?: string
+  fallbackValue?: string
+}
+
+export interface TemplateElementFrame {
+  x: number
+  y: number
+  width: number
+  height: number
+  rotation?: number
+}
+
+export interface TemplateElement {
+  id: string
+  type: string
+  name?: string
+  frame: TemplateElementFrame
+  zIndex?: number
+  visible?: boolean
+  locked?: boolean
+  opacity?: number
+  props: Record<string, unknown>
+  bindings?: Record<string, string>
+  stylePresets?: string[]
+}
+
+export interface TemplateCanvasSettings {
+  width: number
+  height: number
+  unit: 'px' | 'mm'
+  bleed?: number
+  dpi?: number
+  background?: string
+}
+
+export interface TemplateDefinition {
+  canvas: TemplateCanvasSettings
+  elements: TemplateElement[]
+  slots: TemplateSlot[]
+  metadata?: Record<string, unknown>
+  rules?: Array<Record<string, unknown>>
+}
+
+export interface TemplateVersion {
+  id: string
+  versionNumber: number
+  label: string
+  changelog?: string
+  createdAt?: Date
+  createdBy: string
+  sourceVersionId?: string
+  definition: TemplateDefinition
+}
+
+export interface TemplateSummary {
+  id: string
+  ownerUid: string
+  name: string
+  description?: string
+  visibility: TemplateVisibility
+  tags: string[]
+  category?: string
+  createdAt?: Date
+  updatedAt?: Date
+  versionNumber: number
+  currentVersionLabel?: string
+  previewUrl?: string
+  forkedFrom?: string
+  forkedFromOwnerUid?: string
+  forkedFromVersionId?: string
+}
+
+export interface TemplateDocument extends TemplateSummary {
+  currentVersion: TemplateVersion
+  versionHistory: TemplateVersion[]
+}
+
 export interface JSONSchema {
   title?: string
   type: string
