@@ -13,15 +13,40 @@ import {
   type DocumentSnapshot,
 } from 'firebase/firestore'
 import { ensureUser, db } from '../lib/firebase'
-import type { Template, TemplateElement, TemplateSummary } from '../types'
+import type {
+  Template,
+  TemplateElement,
+  TemplateSummary,
+  TemplateVisibility,
+} from '../types'
 
 const COLLECTION = 'templates'
 
 const DEFAULT_WIDTH = 750
 const DEFAULT_HEIGHT = 1050
 const DEFAULT_BACKGROUND = '#1f2937'
+const DEFAULT_VISIBILITY: TemplateVisibility = 'private'
 
 const emptyTemplateElements: TemplateElement[] = []
+
+export interface ListTemplatesOptions {
+  includePublic?: boolean
+}
+
+export interface ListTemplatesResult {
+  currentUserId: string
+  owned: TemplateSummary[]
+  publicLibrary: TemplateSummary[]
+}
+
+const toTemplateSummary = (template: Template, currentUserId: string): TemplateSummary => ({
+  id: template.id,
+  name: template.name,
+  ownerUid: template.ownerUid,
+  visibility: template.visibility,
+  isOwner: template.ownerUid === currentUserId,
+  updatedAt: template.updatedAt,
+})
 
 const mapTemplateDoc = (snapshot: DocumentSnapshot<DocumentData>): Template => {
   const data = snapshot.data()
@@ -43,6 +68,9 @@ const mapTemplateDoc = (snapshot: DocumentSnapshot<DocumentData>): Template => {
     height: Number(data.height) || DEFAULT_HEIGHT,
     background: (data.background as string) ?? DEFAULT_BACKGROUND,
     showGrid: Boolean(data.showGrid ?? true),
+    visibility: (data.visibility as TemplateVisibility) === 'public'
+      ? 'public'
+      : DEFAULT_VISIBILITY,
     elements: Array.isArray(data.elements)
       ? (data.elements as TemplateElement[])
       : [...emptyTemplateElements],
@@ -70,6 +98,7 @@ export const createTemplate = async (
     height,
     background: overrides?.background ?? DEFAULT_BACKGROUND,
     showGrid: overrides?.showGrid ?? true,
+    visibility: overrides?.visibility ?? DEFAULT_VISIBILITY,
     elements: overrides?.elements ?? [...emptyTemplateElements],
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -85,25 +114,43 @@ export const createTemplate = async (
     height,
     background: payload.background,
     showGrid: payload.showGrid,
+    visibility: payload.visibility,
     elements: [...payload.elements],
     createdAt: now,
     updatedAt: now,
   }
 }
 
-export const listTemplates = async (): Promise<TemplateSummary[]> => {
+export const listTemplates = async (
+  options?: ListTemplatesOptions,
+): Promise<ListTemplatesResult> => {
   const user = await ensureUser()
-  const q = query(collection(db, COLLECTION), where('ownerUid', '==', user.uid))
-  const snapshots = await getDocs(q)
-  const templates = snapshots.docs.map((docSnap) => mapTemplateDoc(docSnap))
+  const colRef = collection(db, COLLECTION)
 
-  return templates
+  const [ownedSnapshots, publicSnapshots] = await Promise.all([
+    getDocs(query(colRef, where('ownerUid', '==', user.uid))),
+    options?.includePublic ? getDocs(query(colRef, where('visibility', '==', 'public'))) : Promise.resolve(null),
+  ])
+
+  const ownedTemplates = ownedSnapshots.docs.map((docSnap) => mapTemplateDoc(docSnap))
+  const owned = ownedTemplates
     .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
-    .map((template) => ({
-      id: template.id,
-      name: template.name,
-      updatedAt: template.updatedAt,
-    }))
+    .map((template) => toTemplateSummary(template, user.uid))
+
+  let publicLibrary: TemplateSummary[] = []
+  if (publicSnapshots) {
+    const libraryTemplates = publicSnapshots.docs.map((docSnap) => mapTemplateDoc(docSnap))
+    publicLibrary = libraryTemplates
+      .filter((template) => template.ownerUid !== user.uid)
+      .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
+      .map((template) => toTemplateSummary(template, user.uid))
+  }
+
+  return {
+    currentUserId: user.uid,
+    owned,
+    publicLibrary,
+  }
 }
 
 export const loadTemplate = async (templateId: string): Promise<Template> => {
@@ -117,7 +164,7 @@ export const loadTemplate = async (templateId: string): Promise<Template> => {
 
   const template = mapTemplateDoc(snapshot)
 
-  if (template.ownerUid !== user.uid) {
+  if (template.ownerUid !== user.uid && template.visibility !== 'public') {
     throw new Error('No autorizado para acceder a esta plantilla')
   }
 
@@ -140,9 +187,32 @@ export const updateTemplate = async (
   if (data.height !== undefined) payload.height = data.height
   if (data.background !== undefined) payload.background = data.background
   if (data.showGrid !== undefined) payload.showGrid = data.showGrid
+  if (data.visibility !== undefined) payload.visibility = data.visibility
   if (data.elements !== undefined) payload.elements = data.elements
 
   await updateDoc(docRef, payload)
+}
+
+export const cloneTemplate = async (
+  templateId: string,
+  overrides?: { name?: string },
+): Promise<Template> => {
+  const source = await loadTemplate(templateId)
+
+  const baseName = source.name?.trim().length ? source.name.trim() : 'Plantilla sin nombre'
+  const overrideName = overrides?.name?.trim()
+  const name = overrideName && overrideName.length > 0 ? overrideName : `${baseName} (copia)`
+
+  const elementsCopy = source.elements.map((element) => ({ ...element }))
+
+  return createTemplate(name, {
+    width: source.width,
+    height: source.height,
+    background: source.background,
+    showGrid: source.showGrid,
+    elements: elementsCopy,
+    visibility: DEFAULT_VISIBILITY,
+  })
 }
 
 export const deleteTemplate = async (templateId: string): Promise<void> => {
