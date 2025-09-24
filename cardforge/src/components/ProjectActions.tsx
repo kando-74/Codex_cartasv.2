@@ -5,6 +5,7 @@ interface ProjectActionsProps {
   onRename: (newName: string) => Promise<void> | void
   onSave: () => void
   onNewCard: () => void
+  onImportData: () => void
   onGenerateText: () => void
   onGenerateImage: () => void
   onDelete: () => void
@@ -22,6 +23,7 @@ const ProjectActions = ({
   onRename,
   onSave,
   onNewCard,
+  onImportData,
   onGenerateText,
   onGenerateImage,
   onDelete,
@@ -88,6 +90,13 @@ const ProjectActions = ({
       <div className="flex flex-wrap gap-2 text-sm">
         <button type="button" onClick={onNewCard} className="bg-primary px-4 py-2">
           Nueva carta
+        </button>
+        <button
+          type="button"
+          onClick={onImportData}
+          className="bg-emerald-700 px-4 py-2 text-white hover:bg-emerald-600"
+        >
+          Importar CSV/JSON
         </button>
         <button type="button" onClick={onSave} disabled={isSaving} className="bg-slate-700 px-4 py-2">
           {isSaving ? 'Guardando...' : 'Guardar'}

@@ -6,6 +6,7 @@ import GameContextForm from '../components/GameContextForm'
 import IconGenerator from '../components/IconGenerator'
 import Loader from '../components/Loader'
 import ProjectActions from '../components/ProjectActions'
+import DataImportDialog from '../components/DataImportDialog'
 import { useErrorToasts } from '../components/ErrorToastContext'
 import AiControlPanel from '../components/AiControlPanel'
 import AiPendingReview from '../components/AiPendingReview'
@@ -18,6 +19,7 @@ import {
   getDefaultContext,
   loadProject,
   removeCard,
+  sanitizeId,
   updateProject,
   uploadImage,
 } from '../services/projects'
@@ -27,6 +29,7 @@ import { getDefaultPromptTemplates, useAiMetrics, validateCardCompletion } from 
 // Card sizes / settings (de main)
 import { cloneCardSize, CUSTOM_CARD_SIZE_ID, findMatchingPresetId } from '../lib/cardSizes';
 import { getDefaultCardSizeSetting } from '../lib/settings';
+import type { DataImportResult, ImportedCardSize } from '../lib/dataImport'
 
 // Tipos (unificados en una sola línea de import type)
 import type {
@@ -105,6 +108,39 @@ const normalizeCard = (card: Card, fallbackSize?: Card['size']): Card => {
   }
 }
 
+const ensureUniqueCardId = (desiredId: string, usedIds: Set<string>): string => {
+  const base = desiredId.length > 0 ? desiredId : 'card'
+  let candidate = base
+  let counter = 1
+  while (usedIds.has(candidate)) {
+    candidate = `${base}_${counter}`
+    counter += 1
+  }
+  return candidate
+}
+
+const resolveImportedSizeSetting = (
+  imported: ImportedCardSize | undefined,
+  fallback?: Card['size'],
+): Card['size'] => {
+  const base = fallback ? cloneCardSize(fallback) : getDefaultCardSizeSetting()
+  if (imported?.width !== undefined && Number.isFinite(imported.width) && imported.width > 0) {
+    base.width = imported.width
+  }
+  if (imported?.height !== undefined && Number.isFinite(imported.height) && imported.height > 0) {
+    base.height = imported.height
+  }
+  if (imported?.presetId) {
+    base.presetId = imported.presetId
+  } else if (imported?.width !== undefined && imported?.height !== undefined) {
+    base.presetId = findMatchingPresetId(base.width, base.height) ?? CUSTOM_CARD_SIZE_ID
+  }
+  if (imported?.unit === 'mm') {
+    base.unit = 'mm'
+  }
+  return base
+}
+
 const Editor = () => {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
@@ -116,7 +152,7 @@ const Editor = () => {
   const [isGeneratingText, setIsGeneratingText] = useState(false)
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [dirty, setDirty] = useState(false)
-  const { showError, showInfo } = useErrorToasts()
+  const { showError, showInfo, showWarning } = useErrorToasts()
   const aiMetrics = useAiMetrics()
   const promptTemplates = useMemo<AiPromptTemplate[]>(() => getDefaultPromptTemplates(), [])
   const [aiPromptDraft, setAiPromptDraft] = useState('')
@@ -135,6 +171,7 @@ const Editor = () => {
   const [aiAutoSavePending, setAiAutoSavePending] = useState(false)
   const [aiAlerted, setAiAlerted] = useState(false)
   const [aiPromptTouched, setAiPromptTouched] = useState(false)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
   const providerOptions = useMemo(() => {
     const raw = import.meta.env.VITE_AI_PROVIDERS
     if (raw) {
@@ -791,6 +828,129 @@ cards: normalizedCards,
     updateCardState({ ...selectedCard, icons: mergedIcons })
   }
 
+  const handleImportResult = useCallback(
+    (result: DataImportResult) => {
+      if (!project) {
+        showError('Debes cargar un proyecto antes de importar datos.')
+        return
+      }
+
+      const fallbackSize = selectedCard?.size ? cloneCardSize(selectedCard.size) : getDefaultCardSizeSetting()
+      const usedIds = new Set(Object.keys(project.cards ?? {}))
+      const nextCards: Record<string, Card> = { ...project.cards }
+      const nextVersions: Record<string, Card[]> = { ...cardVersions }
+      const generatedWarnings: string[] = []
+      const createdIds: string[] = []
+      let createdCount = 0
+      let updatedCount = 0
+
+      result.entries.forEach((entry) => {
+        const rawId = entry.id ? sanitizeId(entry.id) : ''
+        const candidateId = rawId.length > 0 ? rawId : undefined
+        const existing = candidateId ? nextCards[candidateId] : undefined
+
+        if (existing && result.updateExisting) {
+          const resolvedSize = resolveImportedSizeSetting(entry.size, existing.size ?? fallbackSize)
+          const previousCard = existing
+          const updatedCard: Card = { ...existing }
+
+          if (entry.title !== undefined) updatedCard.title = entry.title
+          if (entry.type !== undefined) updatedCard.type = entry.type
+          if (entry.value !== undefined) updatedCard.value = entry.value
+          if (entry.action !== undefined) updatedCard.action = entry.action
+          if (entry.actionDescription !== undefined) updatedCard.actionDescription = entry.actionDescription
+          if (entry.context !== undefined) updatedCard.context = entry.context
+          if (entry.imageDescription !== undefined) updatedCard.imageDescription = entry.imageDescription
+          if (entry.icons !== undefined) updatedCard.icons = entry.icons
+          if (entry.imageUrl !== undefined) {
+            updatedCard.imageUrl = entry.imageUrl.trim().length > 0 ? entry.imageUrl : undefined
+          }
+          updatedCard.size = cloneCardSize(resolvedSize)
+
+          nextCards[existing.id] = normalizeCard(updatedCard, resolvedSize)
+          usedIds.add(existing.id)
+          updatedCount += 1
+          nextVersions[existing.id] = [previousCard, ...(nextVersions[existing.id] ?? [])].slice(0, 5)
+          return
+        }
+
+        const resolvedSize = resolveImportedSizeSetting(entry.size, fallbackSize)
+        const baseCard = createEmptyCard(cloneCardSize(resolvedSize))
+        let newId = candidateId ?? baseCard.id
+
+        if (candidateId && existing && !result.updateExisting) {
+          const uniqueId = ensureUniqueCardId(candidateId, usedIds)
+          if (uniqueId !== candidateId) {
+            generatedWarnings.push(`El ID ${candidateId} ya existía. Se utilizó ${uniqueId} para la nueva carta.`)
+          }
+          newId = uniqueId
+        } else if (usedIds.has(newId)) {
+          const uniqueId = ensureUniqueCardId(newId, usedIds)
+          if (uniqueId !== newId) {
+            generatedWarnings.push(`Se detectó un identificador duplicado (${newId}). Se asignó ${uniqueId}.`)
+          }
+          newId = uniqueId
+        }
+
+        const newCard: Card = {
+          ...baseCard,
+          id: newId,
+          title: entry.title ?? '',
+          type: entry.type ?? '',
+          value: entry.value ?? '',
+          action: entry.action ?? '',
+          actionDescription: entry.actionDescription ?? '',
+          context: entry.context ?? '',
+          imageDescription: entry.imageDescription ?? '',
+          icons: entry.icons ?? [],
+          imageUrl: entry.imageUrl && entry.imageUrl.trim().length > 0 ? entry.imageUrl : undefined,
+          size: cloneCardSize(resolvedSize),
+        }
+
+        nextCards[newId] = normalizeCard(newCard, resolvedSize)
+        usedIds.add(newId)
+        createdIds.push(newId)
+        createdCount += 1
+      })
+
+      setProject({ ...project, cards: nextCards })
+      setCardVersions(nextVersions)
+      setDirty(true)
+
+      if (!selectedCardId && createdIds.length > 0) {
+        setSelectedCardId(createdIds[0])
+      }
+
+      const summary: string[] = []
+      if (createdCount > 0) {
+        summary.push(`${createdCount} nuevas`)
+      }
+      if (updatedCount > 0) {
+        summary.push(`${updatedCount} actualizadas`)
+      }
+
+      if (summary.length > 0) {
+        const sourceLabel = result.sourceName ? ` (${result.sourceName})` : ''
+        const skippedLabel = result.skipped > 0 ? ` Se omitieron ${result.skipped} filas sin datos.` : ''
+        showInfo(`Importación completada${sourceLabel}: ${summary.join(', ')}.${skippedLabel}`)
+      } else if (result.skipped > 0) {
+        showWarning(`No se generaron cartas nuevas. Se omitieron ${result.skipped} filas sin datos relevantes.`)
+      } else {
+        showInfo('Los datos importados no generaron cambios en las cartas.')
+      }
+
+      const allWarnings = [...generatedWarnings, ...result.warnings]
+      if (allWarnings.length > 0) {
+        const displayed = allWarnings.slice(0, 3).join(' ')
+        const suffix = allWarnings.length > 3 ? ` (+${allWarnings.length - 3} avisos adicionales)` : ''
+        showWarning(`Avisos durante la importación: ${displayed}${suffix}`)
+      }
+
+      setImportDialogOpen(false)
+    },
+    [cardVersions, project, selectedCard, selectedCardId, showError, showInfo, showWarning],
+  )
+
   const handleDeleteProject = async () => {
     if (!projectId) return
     if (!confirm('¿Eliminar este proyecto y todas sus cartas?')) return
@@ -861,12 +1021,14 @@ cards: normalizedCards,
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6">
-      <ProjectActions
-        name={project.name}
-        onRename={handleRenameProject}
-        onSave={handleSave}
-        onNewCard={handleAddCard}
+    <>
+      <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-6 p-6">
+        <ProjectActions
+          name={project.name}
+          onRename={handleRenameProject}
+          onSave={handleSave}
+          onNewCard={handleAddCard}
+        onImportData={() => setImportDialogOpen(true)}
         onGenerateText={() => handleGenerateText().catch(console.error)}
         onGenerateImage={handleGenerateImage}
         onDelete={handleDeleteProject}
@@ -1023,7 +1185,13 @@ cards: normalizedCards,
           </section>
         </section>
       </section>
-    </main>
+      </main>
+      <DataImportDialog
+        open={importDialogOpen}
+        onClose={() => setImportDialogOpen(false)}
+        onImport={handleImportResult}
+      />
+    </>
   )
 }
 
