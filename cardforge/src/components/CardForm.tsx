@@ -1,5 +1,7 @@
-import { ChangeEvent, useEffect, useState } from 'react'
-import type { Card } from '../types'
+import { ChangeEvent, useEffect, useMemo, useState } from 'react'
+import { CARD_SIZE_OPTIONS, CUSTOM_CARD_SIZE_ID, createCardSizeFromPreset, findMatchingPresetId } from '../lib/cardSizes'
+import { getDefaultCardSizeSetting } from '../lib/settings'
+import type { Card, CardSizeSetting } from '../types'
 
 export interface CardFormProps {
   card: Card
@@ -11,6 +13,22 @@ export interface CardFormProps {
 const CardForm = ({ card, onChange, onDelete, onUploadImage }: CardFormProps) => {
   const [iconsValue, setIconsValue] = useState(card.icons.join(', '))
   const [uploading, setUploading] = useState(false)
+
+  const currentSize = useMemo<CardSizeSetting>(() => {
+    return card.size ?? getDefaultCardSizeSetting()
+  }, [card.size])
+
+  const matchedPresetId = useMemo(() => {
+    if (currentSize.presetId === CUSTOM_CARD_SIZE_ID) {
+      return CUSTOM_CARD_SIZE_ID
+    }
+    if (currentSize.presetId && findMatchingPresetId(currentSize.width, currentSize.height) === currentSize.presetId) {
+      return currentSize.presetId
+    }
+    return findMatchingPresetId(currentSize.width, currentSize.height) ?? CUSTOM_CARD_SIZE_ID
+  }, [currentSize])
+
+  const isCustomSize = matchedPresetId === CUSTOM_CARD_SIZE_ID
 
   useEffect(() => {
     setIconsValue(card.icons.join(', '))
@@ -32,6 +50,43 @@ const CardForm = ({ card, onChange, onDelete, onUploadImage }: CardFormProps) =>
     onChange({ ...card, icons })
   }
 
+  const handleSizePresetChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    const presetId = event.target.value
+    if (presetId === CUSTOM_CARD_SIZE_ID) {
+      onChange({
+        ...card,
+        size: {
+          presetId: CUSTOM_CARD_SIZE_ID,
+          width: currentSize.width,
+          height: currentSize.height,
+          unit: 'mm',
+        },
+      })
+      return
+    }
+
+    const preset = createCardSizeFromPreset(presetId)
+    onChange({
+      ...card,
+      size: preset,
+    })
+  }
+
+  const handleCustomSizeChange = (dimension: 'width' | 'height') =>
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const value = parseFloat(event.target.value)
+      if (!Number.isFinite(value) || value <= 0) {
+        return
+      }
+      const nextSize: CardSizeSetting = {
+        presetId: CUSTOM_CARD_SIZE_ID,
+        width: dimension === 'width' ? value : currentSize.width,
+        height: dimension === 'height' ? value : currentSize.height,
+        unit: 'mm',
+      }
+      onChange({ ...card, size: nextSize })
+    }
+
   const handleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file || !onUploadImage) {
@@ -51,6 +106,51 @@ const CardForm = ({ card, onChange, onDelete, onUploadImage }: CardFormProps) =>
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="rounded-lg border border-slate-700 bg-slate-800/40 p-3">
+        <div className="flex flex-col gap-2">
+          <span className="text-sm font-semibold text-slate-200">Tamaño de la carta</span>
+          <label className="flex flex-col gap-1 text-sm text-slate-100">
+            Formato
+            <select value={matchedPresetId} onChange={handleSizePresetChange}>
+              {CARD_SIZE_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.name} — {option.width} × {option.height} mm
+                </option>
+              ))}
+              <option value={CUSTOM_CARD_SIZE_ID}>Personalizado</option>
+            </select>
+          </label>
+          {isCustomSize ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="flex flex-col gap-1 text-sm text-slate-100">
+                Ancho (mm)
+                <input
+                  type="number"
+                  min={1}
+                  step={0.1}
+                  value={Number.isFinite(currentSize.width) ? currentSize.width : ''}
+                  onChange={handleCustomSizeChange('width')}
+                  placeholder="Ej. 63"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-sm text-slate-100">
+                Alto (mm)
+                <input
+                  type="number"
+                  min={1}
+                  step={0.1}
+                  value={Number.isFinite(currentSize.height) ? currentSize.height : ''}
+                  onChange={handleCustomSizeChange('height')}
+                  placeholder="Ej. 88"
+                />
+              </label>
+            </div>
+          ) : null}
+          <p className="text-xs text-slate-400">
+            Dimensiones actuales: {currentSize.width} × {currentSize.height} mm.
+          </p>
+        </div>
+      </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="flex flex-col gap-1">
           Título
