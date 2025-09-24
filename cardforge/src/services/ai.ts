@@ -241,6 +241,7 @@ interface PerformRequestOptions<T> {
   buildCacheKey?: (provider: AiProviderConfig) => string
   onSuccess?: (provider: AiProviderConfig, data: T) => void
   onFailure?: (error: AIError) => void
+  providerHint?: string
 }
 
 const performRequestWithFailover = async <T>({
@@ -253,6 +254,7 @@ const performRequestWithFailover = async <T>({
   buildCacheKey,
   onSuccess,
   onFailure,
+  providerHint,
 }: PerformRequestOptions<T>): Promise<{ data: T; provider: AiProviderConfig }> => {
   if (!providers.length) {
     throw new AIError(
@@ -262,8 +264,22 @@ const performRequestWithFailover = async <T>({
   }
 
   clearExpiredCache()
-
   const providerOrder = providers.slice().sort((a, b) => (a.priority ?? 1) - (b.priority ?? 1))
+
+  if (providerHint) {
+    const hintedIndex = providerOrder.findIndex(
+      (provider) => provider.name.toLowerCase() === providerHint.toLowerCase(),
+    )
+    if (hintedIndex > 0) {
+      const [preferred] = providerOrder.splice(hintedIndex, 1)
+      providerOrder.unshift(preferred)
+      logAiEvent('info', 'Se priorizó el proveedor solicitado por el usuario.', {
+        provider: preferred.name,
+        promptType,
+        traceId: metadata.traceId,
+      })
+    }
+  }
 
   let lastError: AIError | null = null
 
@@ -463,6 +479,7 @@ export async function generateJSON<T>(
     allowCache,
     signal: options.signal,
     buildCacheKey: (provider) => buildCacheKey(prompt, metadata.promptType, provider.name),
+    providerHint: options.providerHint ?? metadata.providerHint,
     executor: async (provider, composedSignal, attempt, traceId) => {
       const systemPrompt =
         options.systemPrompt ??
@@ -631,6 +648,7 @@ export async function generateImageBase64(
     allowCache,
     signal: options.signal,
     buildCacheKey: (provider) => buildCacheKey(prompt, metadata.promptType, provider.name),
+    providerHint: options.providerHint ?? metadata.providerHint,
     executor: async (provider, composedSignal, attempt, traceId) => {
       const response = await fetch(createUrl(provider, '/v1/images/generations'), {
         method: 'POST',
