@@ -9,6 +9,7 @@ import {
 import TemplateCanvas from '../components/template/TemplateCanvas'
 import TemplatePreview from '../components/template/TemplatePreview'
 import Loader from '../components/Loader'
+import McpConsole from '../components/McpConsole'
 import { useErrorToasts } from '../components/ErrorToastContext'
 import {
   buildExportFileName,
@@ -31,6 +32,9 @@ import type {
   TemplateElementType,
   TemplateSummary,
   TemplateVisibility,
+  McpCommandContext,
+  McpCommandResponse,
+  TemplateCommandOperation,
 } from '../types'
 
 const clampNumber = (value: number, min: number, max: number): number => {
@@ -134,7 +138,7 @@ const formatOwnerId = (ownerUid: string) =>
   ownerUid.length > 10 ? `${ownerUid.slice(0, 10)}…` : ownerUid
 
 const TemplateEditor = () => {
-  const { showError, showInfo } = useErrorToasts()
+  const { showError, showInfo, showWarning } = useErrorToasts()
   const [ownedTemplates, setOwnedTemplates] = useState<TemplateSummary[]>([])
   const [libraryTemplates, setLibraryTemplates] = useState<TemplateSummary[]>([])
   const [currentTemplate, setCurrentTemplate] = useState<Template | null>(null)
@@ -164,6 +168,75 @@ const TemplateEditor = () => {
       return null
     }
     return currentTemplate.elements.find((element) => element.id === selectedElementId) ?? null
+  }, [currentTemplate, selectedElementId])
+
+  const mcpSuggestions = useMemo(() => [
+    'Ajusta la zona de título a 320×90 px y centra el texto.',
+    'Crea un recuadro destacado para los puntos de vida en la esquina inferior derecha.',
+    'Añade una guía para ilustración cuadrada ocupando el 60% superior.',
+    'Convierte la plantilla a formato horizontal y reorganiza subtítulos.',
+  ], [])
+
+  const mcpContext = useMemo<McpCommandContext | null>(() => {
+    if (!currentTemplate) {
+      return null
+    }
+    const elements = currentTemplate.elements.map((element) => {
+      const base = {
+        id: element.id,
+        type: element.type,
+        name: element.name,
+        x: element.x,
+        y: element.y,
+        width: element.width,
+        height: element.height,
+        rotation: element.rotation,
+        visible: element.visible,
+        locked: element.locked,
+        config: {} as Record<string, unknown>,
+      }
+      if (element.type === 'text') {
+        base.config = {
+          text: element.text,
+          fontFamily: element.fontFamily,
+          fontSize: element.fontSize,
+          fontWeight: element.fontWeight,
+          color: element.color,
+          align: element.align,
+        }
+      } else if (element.type === 'rectangle') {
+        base.config = {
+          fill: element.fill,
+          borderColor: element.borderColor,
+          borderWidth: element.borderWidth,
+          borderRadius: element.borderRadius,
+          opacity: element.opacity,
+        }
+      } else if (element.type === 'image') {
+        base.config = {
+          background: element.background,
+          strokeColor: element.strokeColor,
+          strokeWidth: element.strokeWidth,
+          fit: element.fit,
+          placeholder: element.placeholder,
+        }
+      }
+      return base
+    })
+    return {
+      template: {
+        id: currentTemplate.id,
+        name: currentTemplate.name,
+        width: currentTemplate.width,
+        height: currentTemplate.height,
+        background: currentTemplate.background,
+        showGrid: currentTemplate.showGrid,
+        visibility: currentTemplate.visibility,
+        elementCount: elements.length,
+        elements,
+      },
+      selectedElementId,
+    }
   }, [currentTemplate, selectedElementId])
 
   const createExportFileName = useCallback(
@@ -268,26 +341,29 @@ const TemplateEditor = () => {
     }
   }
 
-  const applyTemplateUpdate = (updater: (template: Template) => Template | null) => {
-    if (isReadOnly) {
-      return
-    }
-    let updated = false
-    setCurrentTemplate((prev) => {
-      if (!prev) {
-        return prev
+  const applyTemplateUpdate = useCallback(
+    (updater: (template: Template) => Template | null) => {
+      if (isReadOnly) {
+        return
       }
-      const next = updater(prev)
-      if (!next) {
-        return prev
+      let updated = false
+      setCurrentTemplate((prev) => {
+        if (!prev) {
+          return prev
+        }
+        const next = updater(prev)
+        if (!next) {
+          return prev
+        }
+        updated = true
+        return next
+      })
+      if (updated) {
+        setDirty(true)
       }
-      updated = true
-      return next
-    })
-    if (updated) {
-      setDirty(true)
-    }
-  }
+    },
+    [isReadOnly],
+  )
 
   const applyElementChanges = (elementId: string, changes: Partial<TemplateElement>) => {
     applyTemplateUpdate((template) => {
@@ -351,6 +427,205 @@ const TemplateEditor = () => {
       setSelectedElementId(null)
     }
   }
+
+
+  const handleMcpOperations = useCallback(
+  (
+    operations: TemplateCommandOperation[],
+    meta: { response: McpCommandResponse; autoApply: boolean; logId: string },
+  ) => {
+    if (!operations.length) {
+      if (meta.autoApply) {
+        showInfo('El MCP no devolvió cambios aplicables.')
+      } else {
+        showInfo('Se registró una respuesta MCP sin cambios automáticos. Revisa el historial para más detalles.')
+      }
+      return false
+    }
+    if (!meta.autoApply) {
+      showInfo('Hay cambios sugeridos por el MCP. Revísalos en el historial antes de aplicarlos.')
+      return false
+    }
+    if (!currentTemplate) {
+      return false
+    }
+    if (isReadOnly) {
+      showWarning('Esta plantilla es de solo lectura. Clona una copia para aplicar las instrucciones del MCP.')
+      return false
+    }
+
+    let selectionChanged = false
+    let nextSelection: string | null = selectedElementId
+    let appliedChanges = false
+
+    applyTemplateUpdate((template) => {
+      let next = template
+      let elements = template.elements
+      let mutated = false
+
+      const patchTemplate = (patch: Partial<Template>) => {
+        next = { ...next, ...patch }
+        if (patch.elements) {
+          elements = patch.elements
+        }
+        mutated = true
+      }
+
+      for (const operation of operations) {
+        switch (operation.type) {
+          case 'add_element': {
+            const rawElement = { ...operation.element }
+            const elementId =
+              typeof rawElement.id === 'string' && rawElement.id.trim().length > 0
+                ? rawElement.id
+                : generateElementId()
+            const normalized = normalizeElement(
+              { ...rawElement, id: elementId } as TemplateElement,
+              next.width,
+              next.height,
+            )
+            patchTemplate({ elements: [...elements, normalized] })
+            nextSelection = normalized.id
+            selectionChanged = true
+            break
+          }
+          case 'update_element': {
+            const index = elements.findIndex((item) => item.id === operation.elementId)
+            if (index === -1) {
+              break
+            }
+            const previous = elements[index]
+            const updated = normalizeElement(
+              { ...previous, ...operation.changes } as TemplateElement,
+              next.width,
+              next.height,
+            )
+            if (JSON.stringify(previous) === JSON.stringify(updated)) {
+              break
+            }
+            const nextElements = [...elements]
+            nextElements[index] = updated
+            patchTemplate({ elements: nextElements })
+            break
+          }
+          case 'delete_element': {
+            const exists = elements.some((item) => item.id === operation.elementId)
+            if (!exists) {
+              break
+            }
+            const nextElements = elements.filter((item) => item.id !== operation.elementId)
+            patchTemplate({ elements: nextElements })
+            if (nextSelection === operation.elementId) {
+              nextSelection = null
+              selectionChanged = true
+            }
+            break
+          }
+          case 'reorder_element': {
+            if (elements.length <= 1) {
+              break
+            }
+            const fromIndex = elements.findIndex((item) => item.id === operation.elementId)
+            if (fromIndex === -1) {
+              break
+            }
+            const toIndex = clampNumber(Math.round(operation.index), 0, elements.length - 1)
+            if (fromIndex === toIndex) {
+              break
+            }
+            const reordered = [...elements]
+            const [moved] = reordered.splice(fromIndex, 1)
+            reordered.splice(toIndex, 0, moved)
+            patchTemplate({ elements: reordered })
+            break
+          }
+          case 'set_template': {
+            const changes = operation.changes ?? {}
+            const patch: Partial<Template> = {}
+            let width = next.width
+            let height = next.height
+            let sizeChanged = false
+            if (typeof changes.width === 'number' && Number.isFinite(changes.width)) {
+              const nextWidth = clampNumber(Math.round(changes.width), 200, 1600)
+              if (nextWidth !== width) {
+                width = nextWidth
+                patch.width = nextWidth
+                sizeChanged = true
+              }
+            }
+            if (typeof changes.height === 'number' && Number.isFinite(changes.height)) {
+              const nextHeight = clampNumber(Math.round(changes.height), 200, 1600)
+              if (nextHeight !== height) {
+                height = nextHeight
+                patch.height = nextHeight
+                sizeChanged = true
+              }
+            }
+            if (typeof changes.name === 'string') {
+              patch.name = changes.name
+            }
+            if (typeof changes.background === 'string') {
+              patch.background = changes.background
+            }
+            if (typeof changes.showGrid === 'boolean') {
+              patch.showGrid = changes.showGrid
+            }
+            if (changes.visibility === 'public' || changes.visibility === 'private') {
+              patch.visibility = changes.visibility
+            }
+            if (Object.keys(patch).length > 0) {
+              patchTemplate(patch)
+            }
+            if (sizeChanged) {
+              const normalizedElements = elements.map((element) =>
+                normalizeElement(element, width, height),
+              )
+              patchTemplate({ elements: normalizedElements })
+            }
+            break
+          }
+          case 'focus_element': {
+            if (elements.some((item) => item.id === operation.elementId)) {
+              nextSelection = operation.elementId
+              selectionChanged = true
+            }
+            break
+          }
+          default:
+            break
+        }
+      }
+
+      if (!mutated) {
+        return null
+      }
+      appliedChanges = true
+      return next
+    })
+
+    if (!appliedChanges) {
+      showInfo('Las operaciones propuestas por el MCP no produjeron cambios en la plantilla actual.')
+      return false
+    }
+
+    if (selectionChanged) {
+      setSelectedElementId(nextSelection)
+    }
+
+    const summary = operations.length === 1 ? '1 cambio' : `${operations.length} cambios`
+    showInfo(`Se aplicaron ${summary} sugeridos por la sesión MCP.`)
+    return true
+  },
+  [
+    applyTemplateUpdate,
+    currentTemplate,
+    isReadOnly,
+    selectedElementId,
+    showInfo,
+    showWarning,
+    setSelectedElementId,
+  ],
+)
 
   const handleTemplateFieldChange = (field: keyof UpdateTemplateInput, value: string | number | boolean) => {
     if (!currentTemplate || isReadOnly) {
@@ -1205,6 +1480,21 @@ const TemplateEditor = () => {
                   </p>
                 )}
               </aside>
+            </section>
+
+
+            <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+              {isReadOnly ? (
+                <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+                  Esta plantilla es de solo lectura. Clona una copia para habilitar comandos MCP automáticos.
+                </div>
+              ) : null}
+              <McpConsole
+                disabled={isReadOnly}
+                context={mcpContext}
+                suggestions={mcpSuggestions}
+                onOperations={(operations, meta) => handleMcpOperations(operations, meta)}
+              />
             </section>
 
             <section className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
