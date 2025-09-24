@@ -1,4 +1,11 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  ChangeEvent,
+  FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import TemplateCanvas from '../components/template/TemplateCanvas'
 import TemplatePreview from '../components/template/TemplatePreview'
 import Loader from '../components/Loader'
@@ -11,6 +18,7 @@ import {
   type PdfPageSizeKey,
 } from '../lib/templateExport'
 import {
+  cloneTemplate,
   createTemplate,
   listTemplates,
   loadTemplate,
@@ -22,6 +30,7 @@ import type {
   TemplateElement,
   TemplateElementType,
   TemplateSummary,
+  TemplateVisibility,
 } from '../types'
 
 const clampNumber = (value: number, min: number, max: number): number => {
@@ -121,10 +130,15 @@ const createDefaultElement = (type: TemplateElementType, template: Template): Te
 const formatUpdatedAt = (date?: Date) =>
   date ? new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeStyle: 'short' }).format(date) : 'Sin fecha'
 
+const formatOwnerId = (ownerUid: string) =>
+  ownerUid.length > 10 ? `${ownerUid.slice(0, 10)}…` : ownerUid
+
 const TemplateEditor = () => {
   const { showError, showInfo } = useErrorToasts()
-  const [templates, setTemplates] = useState<TemplateSummary[]>([])
+  const [ownedTemplates, setOwnedTemplates] = useState<TemplateSummary[]>([])
+  const [libraryTemplates, setLibraryTemplates] = useState<TemplateSummary[]>([])
   const [currentTemplate, setCurrentTemplate] = useState<Template | null>(null)
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null)
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
   const [loadingList, setLoadingList] = useState(true)
   const [loadingTemplate, setLoadingTemplate] = useState(false)
@@ -138,6 +152,12 @@ const TemplateEditor = () => {
   const [pdfMargin, setPdfMargin] = useState(5)
   const [pdfPageSize, setPdfPageSize] = useState<PdfPageSizeKey>('A4')
   const [exporting, setExporting] = useState<null | 'png' | 'pdf' | 'json'>(null)
+  const [cloningTemplateId, setCloningTemplateId] = useState<string | null>(null)
+
+  const isOwnTemplate =
+    currentTemplate != null &&
+    (currentUserId === null || currentTemplate.ownerUid === currentUserId)
+  const isReadOnly = Boolean(currentTemplate && !isOwnTemplate)
 
   const selectedElement = useMemo(() => {
     if (!currentTemplate || !selectedElementId) {
@@ -155,8 +175,10 @@ const TemplateEditor = () => {
   const loadTemplatesList = useCallback(async () => {
     setLoadingList(true)
     try {
-      const items = await listTemplates()
-      setTemplates(items)
+      const { currentUserId: userId, owned, publicLibrary } = await listTemplates({ includePublic: true })
+      setCurrentUserId(userId)
+      setOwnedTemplates(owned)
+      setLibraryTemplates(publicLibrary)
     } catch (error) {
       console.error(error)
       showError('No se pudieron cargar las plantillas. Intenta nuevamente.')
@@ -197,10 +219,43 @@ const TemplateEditor = () => {
     }
   }
 
+  const handleCloneTemplate = useCallback(
+    async (templateId: string, templateName: string) => {
+      if (cloningTemplateId) {
+        return
+      }
+      setCloningTemplateId(templateId)
+      setLoadingTemplate(true)
+      try {
+        const cloned = await cloneTemplate(templateId)
+        setCurrentUserId((prev) => prev ?? cloned.ownerUid)
+        setCurrentTemplate({
+          ...cloned,
+          elements: cloned.elements.map((element) =>
+            normalizeElement(element, cloned.width, cloned.height),
+          ) as TemplateElement[],
+        })
+        setSelectedElementId(null)
+        setDirty(false)
+        await loadTemplatesList()
+        const safeName = templateName.trim().length > 0 ? templateName.trim() : 'Plantilla'
+        showInfo(`"${safeName}" se copió a tu biblioteca.`)
+      } catch (error) {
+        console.error(error)
+        showError('No se pudo clonar la plantilla. Intenta nuevamente.')
+      } finally {
+        setCloningTemplateId(null)
+        setLoadingTemplate(false)
+      }
+    },
+    [cloningTemplateId, loadTemplatesList, showError, showInfo],
+  )
+
   const handleCreateTemplate = async () => {
     setLoadingTemplate(true)
     try {
       const template = await createTemplate('Nueva plantilla')
+      setCurrentUserId((prev) => prev ?? template.ownerUid)
       setCurrentTemplate(template)
       setSelectedElementId(null)
       setDirty(false)
@@ -214,6 +269,9 @@ const TemplateEditor = () => {
   }
 
   const applyTemplateUpdate = (updater: (template: Template) => Template | null) => {
+    if (isReadOnly) {
+      return
+    }
     let updated = false
     setCurrentTemplate((prev) => {
       if (!prev) {
@@ -252,7 +310,7 @@ const TemplateEditor = () => {
   }
 
   const handleAddElement = (type: TemplateElementType) => {
-    if (!currentTemplate) {
+    if (!currentTemplate || isReadOnly) {
       return
     }
     const nextElement = normalizeElement(createDefaultElement(type, currentTemplate), currentTemplate.width, currentTemplate.height)
@@ -268,7 +326,7 @@ const TemplateEditor = () => {
   }
 
   const handleDeleteElement = () => {
-    if (!currentTemplate || !selectedElementId) {
+    if (!currentTemplate || !selectedElementId || isReadOnly) {
       return
     }
     let removed = false
@@ -295,7 +353,7 @@ const TemplateEditor = () => {
   }
 
   const handleTemplateFieldChange = (field: keyof UpdateTemplateInput, value: string | number | boolean) => {
-    if (!currentTemplate) {
+    if (!currentTemplate || isReadOnly) {
       return
     }
     let shouldMarkDirty = false
@@ -319,6 +377,14 @@ const TemplateEditor = () => {
           }
           shouldMarkDirty = true
           return { ...prev, background: nextBackground }
+        }
+        case 'visibility': {
+          const nextVisibility = value as TemplateVisibility
+          if (prev.visibility === nextVisibility) {
+            return prev
+          }
+          shouldMarkDirty = true
+          return { ...prev, visibility: nextVisibility }
         }
         case 'showGrid': {
           const nextShowGrid = Boolean(value)
@@ -369,6 +435,10 @@ const TemplateEditor = () => {
 
   const handleTemplateNameChange = (event: ChangeEvent<HTMLInputElement>) => {
     handleTemplateFieldChange('name', event.target.value)
+  }
+
+  const handleTemplateVisibilityChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    handleTemplateFieldChange('visibility', event.target.value as TemplateVisibility)
   }
 
   const handleElementNameChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -466,7 +536,7 @@ const TemplateEditor = () => {
 
   const handleSaveTemplate = async (event: FormEvent) => {
     event.preventDefault()
-    if (!currentTemplate || saving) {
+    if (!currentTemplate || saving || isReadOnly) {
       return
     }
     setSaving(true)
@@ -477,14 +547,22 @@ const TemplateEditor = () => {
         height: Math.round(currentTemplate.height),
         background: currentTemplate.background,
         showGrid: currentTemplate.showGrid,
+        visibility: currentTemplate.visibility,
         elements: currentTemplate.elements,
       }
       await updateTemplate(currentTemplate.id, payload)
+      const savedAt = new Date()
+      setCurrentTemplate((prev) => (prev ? { ...prev, updatedAt: savedAt } : prev))
       setDirty(false)
-      setTemplates((items) =>
+      setOwnedTemplates((items) =>
         items.map((item) =>
           item.id === currentTemplate.id
-            ? { ...item, name: currentTemplate.name, updatedAt: new Date() }
+            ? {
+                ...item,
+                name: currentTemplate.name,
+                visibility: currentTemplate.visibility,
+                updatedAt: savedAt,
+              }
             : item,
         ),
       )
@@ -596,43 +674,121 @@ const TemplateEditor = () => {
     }
   }
 
+  const templateStatusText = isReadOnly
+    ? 'Solo lectura'
+    : dirty
+    ? 'Cambios sin guardar'
+    : 'Sin cambios pendientes'
+  const templateStatusClass = isReadOnly
+    ? 'text-slate-500'
+    : dirty
+    ? 'text-amber-400'
+    : 'text-slate-500'
+
   return (
     <main className="flex min-h-screen flex-col gap-6 bg-slate-900 p-6 lg:flex-row">
       <aside className="flex w-full max-w-xs flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
         <header className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Plantillas</h2>
-          <button type="button" onClick={handleCreateTemplate} className="rounded-lg bg-primary px-3 py-2 text-sm">
+          <button
+            type="button"
+            onClick={handleCreateTemplate}
+            className="rounded-lg bg-primary px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={loadingList || Boolean(cloningTemplateId)}
+          >
             Nueva
           </button>
         </header>
         {loadingList ? (
           <Loader message="Cargando plantillas" />
-        ) : templates.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-slate-700/70 bg-slate-900/40 p-4 text-sm text-slate-400">
-            Crea tu primera plantilla para comenzar a diseñar.
-          </p>
         ) : (
-          <ul className="flex flex-col gap-2 overflow-y-auto pr-1">
-            {templates.map((template) => {
-              const isActive = currentTemplate?.id === template.id
-              return (
-                <li key={template.id}>
-                  <button
-                    type="button"
-                    onClick={() => handleSelectTemplate(template.id)}
-                    className={`flex w-full flex-col gap-1 rounded-xl border px-3 py-2 text-left transition ${
-                      isActive
-                        ? 'border-primary bg-primary/15 text-slate-100'
-                        : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
-                    }`}
-                  >
-                    <span className="text-sm font-semibold">{template.name}</span>
-                    <span className="text-xs text-slate-400">{formatUpdatedAt(template.updatedAt)}</span>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+          <div className="flex max-h-[calc(100vh-220px)] flex-1 flex-col gap-6 overflow-y-auto pr-1">
+            <section className="flex flex-col gap-2">
+              <h3 className="text-sm font-semibold text-slate-200">Tus plantillas</h3>
+              {ownedTemplates.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-slate-700/70 bg-slate-900/40 p-4 text-sm text-slate-400">
+                  Crea tu primera plantilla para comenzar a diseñar.
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {ownedTemplates.map((template) => {
+                    const isActive = currentTemplate?.id === template.id
+                    const visibilityLabel = template.visibility === 'public' ? 'Pública' : 'Privada'
+                    const visibilityClasses =
+                      template.visibility === 'public'
+                        ? 'text-emerald-300'
+                        : 'text-slate-500'
+                    return (
+                      <li key={template.id}>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTemplate(template.id)}
+                          className={`flex w-full flex-col gap-1 rounded-xl border px-3 py-2 text-left transition ${
+                            isActive
+                              ? 'border-primary bg-primary/15 text-slate-100'
+                              : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
+                          }`}
+                        >
+                          <span className="text-sm font-semibold">{template.name}</span>
+                          <div className="flex items-center justify-between text-xs text-slate-400">
+                            <span>{formatUpdatedAt(template.updatedAt)}</span>
+                            <span className={`text-[11px] uppercase tracking-wide ${visibilityClasses}`}>
+                              {visibilityLabel}
+                            </span>
+                          </div>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
+
+            <section className="flex flex-col gap-2">
+              <h3 className="text-sm font-semibold text-slate-200">Biblioteca pública</h3>
+              {libraryTemplates.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-slate-700/70 bg-slate-900/40 p-4 text-sm text-slate-400">
+                  Aún no hay plantillas públicas disponibles. Publica una de las tuyas o vuelve más tarde.
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {libraryTemplates.map((template) => {
+                    const isActive = currentTemplate?.id === template.id
+                    const isCloning = cloningTemplateId === template.id
+                    return (
+                      <li key={template.id} className="flex items-start gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTemplate(template.id)}
+                          className={`flex w-full flex-col gap-1 rounded-xl border px-3 py-2 text-left transition ${
+                            isActive
+                              ? 'border-primary bg-primary/15 text-slate-100'
+                              : 'border-slate-800 bg-slate-900/40 hover:border-slate-700'
+                          }`}
+                        >
+                          <span className="text-sm font-semibold">{template.name}</span>
+                          <div className="flex items-center justify-between text-xs text-slate-400">
+                            <span>{formatUpdatedAt(template.updatedAt)}</span>
+                            <span className="text-[11px] uppercase tracking-wide text-slate-500">
+                              Autor: {formatOwnerId(template.ownerUid)}
+                            </span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCloneTemplate(template.id, template.name)}
+                          className="whitespace-nowrap rounded-lg border border-primary/50 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={cloningTemplateId !== null}
+                        >
+                          {isCloning ? 'Clonando…' : 'Clonar'}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
+          </div>
         )}
       </aside>
       <section className="flex w-full flex-1 flex-col gap-5">
@@ -646,22 +802,37 @@ const TemplateEditor = () => {
                     value={currentTemplate.name}
                     onChange={handleTemplateNameChange}
                     placeholder="Plantilla personalizada"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-base"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-base disabled:opacity-60"
+                    disabled={isReadOnly}
                   />
                 </label>
                 <div className="flex items-center gap-3">
-                  <span className={`text-xs ${dirty ? 'text-amber-400' : 'text-slate-500'}`}>
-                    {dirty ? 'Cambios sin guardar' : 'Sin cambios pendientes'}
-                  </span>
+                  <span className={`text-xs ${templateStatusClass}`}>{templateStatusText}</span>
                   <button
                     type="submit"
-                    disabled={!dirty || saving}
+                    disabled={isReadOnly || !dirty || saving}
                     className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold disabled:opacity-60"
                   >
                     {saving ? 'Guardando…' : 'Guardar'}
                   </button>
                 </div>
               </div>
+              {isReadOnly ? (
+                <div className="mt-4 flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                  <p>
+                    Esta plantilla forma parte de la biblioteca pública y no se puede editar directamente. Cópiala para
+                    personalizarla.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => currentTemplate && handleCloneTemplate(currentTemplate.id, currentTemplate.name)}
+                    className="self-start rounded-lg border border-primary/50 bg-primary/10 px-3 py-2 text-xs font-semibold text-primary hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={cloningTemplateId !== null}
+                  >
+                    {cloningTemplateId === currentTemplate.id ? 'Clonando…' : 'Clonar en mis plantillas'}
+                  </button>
+                </div>
+              ) : null}
               <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
                 <label className="flex flex-col gap-1 text-xs">
                   Ancho (px)
@@ -672,7 +843,8 @@ const TemplateEditor = () => {
                     step={1}
                     value={Math.round(currentTemplate.width)}
                     onChange={handleTemplateSizeChange('width')}
-                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:opacity-60"
+                    disabled={isReadOnly}
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-xs">
@@ -684,7 +856,8 @@ const TemplateEditor = () => {
                     step={1}
                     value={Math.round(currentTemplate.height)}
                     onChange={handleTemplateSizeChange('height')}
-                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:opacity-60"
+                    disabled={isReadOnly}
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-xs">
@@ -693,7 +866,8 @@ const TemplateEditor = () => {
                     type="color"
                     value={currentTemplate.background}
                     onChange={handleBackgroundChange}
-                    className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900"
+                    className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isReadOnly}
                   />
                 </label>
                 <label className="flex flex-col gap-1 text-xs">
@@ -703,8 +877,24 @@ const TemplateEditor = () => {
                       type="checkbox"
                       checked={currentTemplate.showGrid}
                       onChange={handleGridToggle}
+                      disabled={isReadOnly}
                     />
                     <span>Mostrar</span>
+                  </span>
+                </label>
+                <label className="flex flex-col gap-1 text-xs md:col-span-2">
+                  Visibilidad
+                  <select
+                    value={currentTemplate.visibility}
+                    onChange={handleTemplateVisibilityChange}
+                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:opacity-60"
+                    disabled={isReadOnly}
+                  >
+                    <option value="private">Privada (solo tú)</option>
+                    <option value="public">Pública (biblioteca compartida)</option>
+                  </select>
+                  <span className="text-[11px] text-slate-500">
+                    Las plantillas públicas aparecen en la biblioteca compartida para que otros usuarios puedan clonarlas.
                   </span>
                 </label>
               </div>
@@ -725,29 +915,32 @@ const TemplateEditor = () => {
                     />
                     <span className="w-16 text-xs text-slate-400">{Math.round(zoom * 100)}%</span>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleAddElement('text')}
-                      className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-                    >
-                      + Texto
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAddElement('rectangle')}
-                      className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-                    >
-                      + Rectángulo
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAddElement('image')}
-                      className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
-                    >
-                      + Imagen
-                    </button>
-                  </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleAddElement('text')}
+                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isReadOnly}
+                  >
+                    + Texto
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddElement('rectangle')}
+                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isReadOnly}
+                  >
+                    + Rectángulo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddElement('image')}
+                    className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={isReadOnly}
+                  >
+                    + Imagen
+                  </button>
+                </div>
                 </div>
                 <div className="relative flex min-h-[420px] flex-1">
                   {loadingTemplate ? (
@@ -763,6 +956,7 @@ const TemplateEditor = () => {
                     elements={currentTemplate.elements}
                     selectedElementId={selectedElementId}
                     zoom={zoom}
+                    interactive={!isReadOnly}
                     onSelectElement={setSelectedElementId}
                     onUpdateElement={handleCanvasUpdate}
                   />
@@ -778,13 +972,13 @@ const TemplateEditor = () => {
                   ) : null}
                 </header>
                 {selectedElement ? (
-                  <div className="mt-4 flex flex-col gap-4 text-sm">
+                  <fieldset className="mt-4 flex flex-col gap-4 text-sm" disabled={isReadOnly}>
                     <label className="flex flex-col gap-2 text-xs">
                       Nombre
                       <input
                         value={selectedElement.name}
                         onChange={handleElementNameChange}
-                        className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                        className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </label>
                     <div className="grid grid-cols-2 gap-3 text-xs">
@@ -794,7 +988,7 @@ const TemplateEditor = () => {
                           type="number"
                           value={Math.round(selectedElement.x)}
                           onChange={handleElementNumberChange('x')}
-                          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </label>
                       <label className="flex flex-col gap-1">
@@ -803,7 +997,7 @@ const TemplateEditor = () => {
                           type="number"
                           value={Math.round(selectedElement.y)}
                           onChange={handleElementNumberChange('y')}
-                          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </label>
                       <label className="flex flex-col gap-1">
@@ -812,7 +1006,7 @@ const TemplateEditor = () => {
                           type="number"
                           value={Math.round(selectedElement.width)}
                           onChange={handleElementNumberChange('width')}
-                          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </label>
                       <label className="flex flex-col gap-1">
@@ -821,7 +1015,7 @@ const TemplateEditor = () => {
                           type="number"
                           value={Math.round(selectedElement.height)}
                           onChange={handleElementNumberChange('height')}
-                          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                          className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                         />
                       </label>
                     </div>
@@ -852,7 +1046,7 @@ const TemplateEditor = () => {
                             value={selectedElement.text}
                             onChange={handleTextContentChange}
                             rows={4}
-                            className="min-h-[100px] rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                            className="min-h-[100px] rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </label>
                         <label className="flex flex-col gap-2 text-xs">
@@ -860,7 +1054,7 @@ const TemplateEditor = () => {
                           <input
                             value={selectedElement.fontFamily}
                             onChange={handleTextFontChange('fontFamily')}
-                            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </label>
                         <div className="grid grid-cols-2 gap-3 text-xs">
@@ -870,7 +1064,7 @@ const TemplateEditor = () => {
                               type="number"
                               value={Math.round(selectedElement.fontSize)}
                               onChange={handleTextFontChange('fontSize')}
-                              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                             />
                           </label>
                           <label className="flex flex-col gap-1">
@@ -879,7 +1073,7 @@ const TemplateEditor = () => {
                               type="number"
                               value={Math.round(selectedElement.fontWeight)}
                               onChange={handleTextFontChange('fontWeight')}
-                              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                             />
                           </label>
                         </div>
@@ -889,7 +1083,7 @@ const TemplateEditor = () => {
                             type="color"
                             value={selectedElement.color}
                             onChange={handleTextFontChange('color') as (event: ChangeEvent<HTMLInputElement>) => void}
-                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900"
+                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </label>
                         <label className="flex flex-col gap-1 text-xs">
@@ -897,7 +1091,7 @@ const TemplateEditor = () => {
                           <select
                             value={selectedElement.align}
                             onChange={handleTextFontChange('align') as (event: ChangeEvent<HTMLSelectElement>) => void}
-                            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             <option value="left">Izquierda</option>
                             <option value="center">Centro</option>
@@ -915,7 +1109,7 @@ const TemplateEditor = () => {
                             type="color"
                             value={selectedElement.fill}
                             onChange={handleRectangleFieldChange('fill')}
-                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900"
+                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </label>
                         <label className="flex flex-col gap-1">
@@ -924,7 +1118,7 @@ const TemplateEditor = () => {
                             type="color"
                             value={selectedElement.borderColor}
                             onChange={handleRectangleFieldChange('borderColor')}
-                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900"
+                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </label>
                         <div className="grid grid-cols-2 gap-3">
@@ -934,7 +1128,7 @@ const TemplateEditor = () => {
                               type="number"
                               value={Math.round(selectedElement.borderWidth)}
                               onChange={handleRectangleNumberChange('borderWidth')}
-                              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                             />
                           </label>
                           <label className="flex flex-col gap-1">
@@ -943,7 +1137,7 @@ const TemplateEditor = () => {
                               type="number"
                               value={Math.round(selectedElement.borderRadius)}
                               onChange={handleRectangleNumberChange('borderRadius')}
-                              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                              className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                             />
                           </label>
                         </div>
@@ -956,7 +1150,7 @@ const TemplateEditor = () => {
                             step={0.05}
                             value={Number(selectedElement.opacity.toFixed(2))}
                             onChange={handleRectangleNumberChange('opacity')}
-                            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </label>
                       </div>
@@ -970,7 +1164,7 @@ const TemplateEditor = () => {
                             type="color"
                             value={selectedElement.background}
                             onChange={handleImageFieldChange('background')}
-                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900"
+                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </label>
                         <label className="flex flex-col gap-1">
@@ -979,7 +1173,7 @@ const TemplateEditor = () => {
                             type="color"
                             value={selectedElement.strokeColor}
                             onChange={handleImageFieldChange('strokeColor')}
-                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900"
+                            className="h-10 w-full cursor-pointer rounded-lg border border-slate-700 bg-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </label>
                         <label className="flex flex-col gap-1">
@@ -990,7 +1184,7 @@ const TemplateEditor = () => {
                             max={12}
                             value={Math.round(selectedElement.strokeWidth)}
                             onChange={handleImageStrokeWidthChange}
-                            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                           />
                         </label>
                       </div>
@@ -999,11 +1193,12 @@ const TemplateEditor = () => {
                     <button
                       type="button"
                       onClick={handleDeleteElement}
-                      className="mt-4 rounded-lg border border-red-600/60 bg-red-600/20 px-4 py-2 text-sm text-red-200 hover:bg-red-600/30"
+                      className="mt-4 rounded-lg border border-red-600/60 bg-red-600/20 px-4 py-2 text-sm text-red-200 hover:bg-red-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={isReadOnly}
                     >
                       Eliminar elemento
                     </button>
-                  </div>
+                  </fieldset>
                 ) : (
                   <p className="mt-6 rounded-xl border border-dashed border-slate-700/70 bg-slate-900/50 p-4 text-sm text-slate-400">
                     Selecciona un elemento del lienzo para editar sus propiedades.

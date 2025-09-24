@@ -80,6 +80,8 @@ export type TemplateElement =
   | TemplateRectangleElement
   | TemplateImageElement
 
+export type TemplateVisibility = 'private' | 'public'
+
 export interface Template {
   id: string
   ownerUid: string
@@ -88,6 +90,7 @@ export interface Template {
   height: number
   background: string
   showGrid: boolean
+  visibility: TemplateVisibility
   elements: TemplateElement[]
   createdAt?: Date
   updatedAt?: Date
@@ -96,6 +99,9 @@ export interface Template {
 export interface TemplateSummary {
   id: string
   name: string
+  ownerUid: string
+  visibility: TemplateVisibility
+  isOwner: boolean
   updatedAt?: Date
 }
 
